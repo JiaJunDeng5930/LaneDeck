@@ -35,6 +35,17 @@ describe("protocol frame contract", () => {
     });
   });
 
+  it("accepts RFC 3339 years below 100", () => {
+    expect(
+      parseFrame({
+        ...validCountFrame,
+        openedAt: "0001-01-01T00:00:00Z",
+      }),
+    ).toMatchObject({
+      openedAt: "0001-01-01T00:00:00Z",
+    });
+  });
+
   it("accepts a time-triggered empty frame", () => {
     expect(
       parseFrame({

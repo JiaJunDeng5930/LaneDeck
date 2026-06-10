@@ -1,6 +1,6 @@
 use lanedeck_protocol::{
-    ProtocolError, StageMode, TriggerKind, parse_frame_json, parse_ingest_batch_json,
-    parse_lane_config,
+    Diagnostic, IngestAck, ProtocolError, StageHistory, StageInvocation, StageMode, StageResult,
+    TriggerKind, parse_frame_json, parse_ingest_batch_json, parse_lane_config,
 };
 use serde_json::json;
 
@@ -93,6 +93,40 @@ fn parses_typed_ingest_batch() {
 
     assert_eq!(batch.workspace_id, "workspace.local");
     assert_eq!(batch.frames.len(), 1);
+}
+
+#[test]
+fn exposes_shared_rust_wire_dtos() {
+    let frame = parse_frame_json(valid_count_frame()).expect("valid frame");
+    let lane = parse_lane_config(&serde_json::to_vec(&valid_lane_config()).unwrap()).unwrap();
+    let history = StageHistory {
+        upstream_frames: vec![frame.clone()],
+        metric_frames: vec![],
+        event_frames: vec![],
+    };
+    let invocation = StageInvocation {
+        current_frame: frame.clone(),
+        history: history.clone(),
+        lane,
+        now: frame.opened_at,
+    };
+    let stage_result = StageResult {
+        records: frame.records.clone(),
+        diagnostics: vec![Diagnostic {
+            path: "records".to_string(),
+            message: "ok".to_string(),
+        }],
+    };
+    let ack = IngestAck {
+        batch_id: "batch-1".to_string(),
+        accepted_frame_count: 1,
+        diagnostics: vec![],
+    };
+
+    assert_eq!(history.upstream_frames.len(), 1);
+    assert_eq!(invocation.current_frame.lane_id, "lane.test-runtime");
+    assert_eq!(stage_result.records.len(), 1);
+    assert_eq!(ack.accepted_frame_count, 1);
 }
 
 #[test]

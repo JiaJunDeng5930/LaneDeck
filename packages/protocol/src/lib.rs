@@ -77,10 +77,45 @@ pub struct IngestBatch {
     pub frames: Vec<Frame>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProtocolDiagnostic {
     pub path: String,
     pub message: String,
+}
+
+pub type Diagnostic = ProtocolDiagnostic;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestAck {
+    pub batch_id: String,
+    pub accepted_frame_count: u32,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageHistory {
+    pub upstream_frames: Vec<Frame>,
+    pub metric_frames: Vec<Frame>,
+    pub event_frames: Vec<Frame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageInvocation {
+    pub current_frame: Frame,
+    pub history: StageHistory,
+    pub lane: LaneConfig,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageResult {
+    pub records: Vec<FrameRecord>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Error)]
