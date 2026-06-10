@@ -250,7 +250,7 @@ fn failed_downstream_stage_does_not_leak_partial_effects() {
 }
 
 #[test]
-fn current_frames_are_not_loaded_into_their_own_stage_history() {
+fn metric_history_is_loaded_after_metric_frame_persistence() {
     let opened_at = instant(1_700_008_000);
     let second_record_at = instant(1_700_008_003);
     let store = StoreProbe::recording(empty_history());
@@ -269,7 +269,8 @@ fn current_frames_are_not_loaded_into_their_own_stage_history() {
 
     let invocations = runner.invocations();
     assert!(invocations[0].history.upstream_frames.is_empty());
-    assert!(invocations[1].history.metric_frames.is_empty());
+    assert_eq!(invocations[1].history.metric_frames.len(), 1);
+    assert_record_ids(&invocations[1].history.metric_frames[0], &["metric:r1+r2"]);
 }
 
 #[test]
@@ -399,34 +400,24 @@ fn failed_count_closure_is_retried_as_count_on_later_tick() {
 }
 
 #[test]
-fn failed_atomic_append_keeps_raw_records_without_partial_history() {
+fn event_failure_preserves_persisted_raw_and_metric_for_event_retry() {
     let opened_at = instant(1_700_010_000);
     let second_record_at = instant(1_700_010_003);
     let retry_record_at = instant(1_700_010_006);
-    let store = StoreProbe::with_append_results(
-        empty_history(),
-        vec![Err("store write failed".to_string()), Ok(())],
-    );
+    let store = StoreProbe::recording(empty_history());
     let store_probe = store.clone();
     let runner = RunnerProbe::scripted_results(vec![
         Ok(stage_result(vec![raw_record(
             "metric:first",
             second_record_at,
         )])),
-        Ok(stage_result(vec![raw_record(
-            "event:first",
-            second_record_at,
-        )])),
-        Ok(stage_result(vec![raw_record(
-            "metric:retry",
-            retry_record_at,
-        )])),
+        Err("event exploded".to_string()),
         Ok(stage_result(vec![raw_record(
             "event:retry",
             retry_record_at,
         )])),
     ]);
-    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner.clone()).unwrap();
 
     engine
         .ingest_raw_record(raw_record("r1", opened_at), opened_at)
@@ -437,15 +428,84 @@ fn failed_atomic_append_keeps_raw_records_without_partial_history() {
             .is_err()
     );
     assert!(engine.drain_effects().is_empty());
-    assert!(store_probe.appended_batches().is_empty());
+    let persisted_after_failure = store_probe.appended_frames();
+    assert_eq!(persisted_after_failure.len(), 2);
+    assert_eq!(persisted_after_failure[0].stage, StageKind::Raw);
+    assert_eq!(persisted_after_failure[1].stage, StageKind::Metric);
+    assert_record_ids(&persisted_after_failure[0], &["r1", "r2"]);
+    assert_record_ids(&persisted_after_failure[1], &["metric:first"]);
 
     let effects = engine
         .ingest_raw_record(raw_record("r3", retry_record_at), retry_record_at)
         .unwrap();
     let raw_frame = closed_frame(&effects, StageKind::Raw);
-    let appended_batches = store_probe.appended_batches();
+    let invocations = runner.invocations();
+    let persisted_after_retry = store_probe.appended_frames();
 
     assert_record_ids(raw_frame, &["r1", "r2"]);
-    assert_eq!(appended_batches.len(), 1);
-    assert_eq!(appended_batches[0].len(), 3);
+    assert_eq!(invocations.len(), 3);
+    assert_eq!(invocations[0].current_frame.stage, StageKind::Raw);
+    assert_eq!(invocations[1].current_frame.stage, StageKind::Metric);
+    assert_eq!(invocations[2].current_frame.stage, StageKind::Metric);
+    assert_record_ids(&invocations[2].current_frame, &["metric:first"]);
+    assert_record_ids(&invocations[2].history.metric_frames[0], &["metric:first"]);
+    assert_eq!(persisted_after_retry.len(), 3);
+    assert_eq!(persisted_after_retry[2].stage, StageKind::Event);
+}
+
+#[test]
+fn metric_persist_failure_retries_metric_frame_without_rerunning_metric_stage() {
+    let opened_at = instant(1_700_010_100);
+    let second_record_at = instant(1_700_010_103);
+    let retry_record_at = instant(1_700_010_106);
+    let store = StoreProbe::with_append_results(
+        empty_history(),
+        vec![
+            Ok(()),
+            Err("metric write failed".to_string()),
+            Ok(()),
+            Ok(()),
+        ],
+    );
+    let store_probe = store.clone();
+    let runner = RunnerProbe::scripted_results(vec![
+        Ok(stage_result(vec![raw_record(
+            "metric:first",
+            second_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:retry",
+            retry_record_at,
+        )])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner.clone()).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    assert!(
+        engine
+            .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+            .is_err()
+    );
+    assert!(engine.drain_effects().is_empty());
+    let persisted_after_failure = store_probe.appended_frames();
+    assert_eq!(persisted_after_failure.len(), 1);
+    assert_eq!(persisted_after_failure[0].stage, StageKind::Raw);
+
+    let effects = engine
+        .ingest_raw_record(raw_record("r3", retry_record_at), retry_record_at)
+        .unwrap();
+    let raw_frame = closed_frame(&effects, StageKind::Raw);
+    let invocations = runner.invocations();
+    let persisted_after_retry = store_probe.appended_frames();
+
+    assert_record_ids(raw_frame, &["r1", "r2"]);
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[0].current_frame.stage, StageKind::Raw);
+    assert_eq!(invocations[1].current_frame.stage, StageKind::Metric);
+    assert_record_ids(&invocations[1].current_frame, &["metric:first"]);
+    assert_eq!(persisted_after_retry.len(), 3);
+    assert_eq!(persisted_after_retry[1].stage, StageKind::Metric);
+    assert_eq!(persisted_after_retry[2].stage, StageKind::Event);
 }

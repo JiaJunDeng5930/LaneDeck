@@ -146,7 +146,7 @@ struct StoreProbeState {
     record_appends: bool,
     append_results: Vec<Result<(), String>>,
     append_attempts: usize,
-    appended_batches: Vec<Vec<Frame>>,
+    appended_frames: Vec<Frame>,
 }
 
 impl StoreProbe {
@@ -158,7 +158,7 @@ impl StoreProbe {
                 record_appends: false,
                 append_results: Vec::new(),
                 append_attempts: 0,
-                appended_batches: Vec::new(),
+                appended_frames: Vec::new(),
             })),
         }
     }
@@ -171,7 +171,7 @@ impl StoreProbe {
                 record_appends: true,
                 append_results: Vec::new(),
                 append_attempts: 0,
-                appended_batches: Vec::new(),
+                appended_frames: Vec::new(),
             })),
         }
     }
@@ -187,13 +187,13 @@ impl StoreProbe {
                 record_appends: true,
                 append_results,
                 append_attempts: 0,
-                appended_batches: Vec::new(),
+                appended_frames: Vec::new(),
             })),
         }
     }
 
-    pub fn appended_batches(&self) -> Vec<Vec<Frame>> {
-        self.inner.borrow().appended_batches.clone()
+    pub fn appended_frames(&self) -> Vec<Frame> {
+        self.inner.borrow().appended_frames.clone()
     }
 
     pub fn requests(&self) -> Vec<HistoryRequest> {
@@ -208,7 +208,7 @@ impl HistoryStore for StoreProbe {
         Ok(inner.history.clone())
     }
 
-    fn append_frames(&mut self, frames: Vec<Frame>) -> Result<(), EngineError> {
+    fn append_frame(&mut self, frame: Frame) -> Result<(), EngineError> {
         let mut inner = self.inner.borrow_mut();
         let append_index = inner.append_attempts;
         inner.append_attempts += 1;
@@ -216,15 +216,13 @@ impl HistoryStore for StoreProbe {
             return Err(EngineError::Store(message.clone()));
         }
         if inner.record_appends {
-            for frame in frames.iter().cloned() {
-                match frame.stage {
-                    StageKind::Raw => inner.history.upstream_frames.push(frame),
-                    StageKind::Metric => inner.history.metric_frames.push(frame),
-                    StageKind::Event => inner.history.event_frames.push(frame),
-                }
+            match frame.stage {
+                StageKind::Raw => inner.history.upstream_frames.push(frame.clone()),
+                StageKind::Metric => inner.history.metric_frames.push(frame.clone()),
+                StageKind::Event => inner.history.event_frames.push(frame.clone()),
             }
         }
-        inner.appended_batches.push(frames);
+        inner.appended_frames.push(frame);
         Ok(())
     }
 }

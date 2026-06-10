@@ -19,7 +19,7 @@ pub struct HistoryRequest {
 
 pub trait HistoryStore {
     fn load_history(&self, request: HistoryRequest) -> Result<StageHistory, EngineError>;
-    fn append_frames(&mut self, frames: Vec<Frame>) -> Result<(), EngineError>;
+    fn append_frame(&mut self, frame: Frame) -> Result<(), EngineError>;
 }
 
 pub trait StageRunner {
@@ -67,10 +67,35 @@ pub struct LaneEngine<S, R> {
     effects: Vec<EngineEffect>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct PendingRawClose {
     trigger_kind: TriggerKind,
     closed_at: DateTime<Utc>,
+    raw_frame: Option<Frame>,
+    raw_persisted: bool,
+    metric_frame: Option<Frame>,
+    metric_diagnostics: Vec<Diagnostic>,
+    metric_persisted: bool,
+    event_frame: Option<Frame>,
+    event_diagnostics: Vec<Diagnostic>,
+    event_persisted: bool,
+}
+
+impl PendingRawClose {
+    fn new(trigger_kind: TriggerKind, closed_at: DateTime<Utc>) -> Self {
+        Self {
+            trigger_kind,
+            closed_at,
+            raw_frame: None,
+            raw_persisted: false,
+            metric_frame: None,
+            metric_diagnostics: Vec::new(),
+            metric_persisted: false,
+            event_frame: None,
+            event_diagnostics: Vec::new(),
+            event_persisted: false,
+        }
+    }
 }
 
 impl<S, R> LaneEngine<S, R>
@@ -189,69 +214,154 @@ where
         closed_at: DateTime<Utc>,
     ) -> Result<(), EngineError> {
         if self.pending_raw_close.is_none() {
-            self.pending_raw_close = Some(PendingRawClose {
-                trigger_kind,
-                closed_at,
-            });
+            self.pending_raw_close = Some(PendingRawClose::new(trigger_kind, closed_at));
         }
         self.retry_pending_raw_close()
     }
 
     fn retry_pending_raw_close(&mut self) -> Result<(), EngineError> {
-        let pending_close = match self.pending_raw_close.clone() {
-            Some(pending_close) => pending_close,
-            None => return Ok(()),
-        };
-        self.close_raw_frame(pending_close.trigger_kind, pending_close.closed_at)
+        if self.pending_raw_close.is_none() {
+            return Ok(());
+        }
+        let effects_start = self.effects.len();
+        let result = self.advance_pending_raw_close();
+
+        if result.is_err() {
+            self.effects.truncate(effects_start);
+        }
+
+        result
     }
 
-    fn close_raw_frame(
-        &mut self,
-        trigger_kind: TriggerKind,
-        closed_at: DateTime<Utc>,
-    ) -> Result<(), EngineError> {
-        let effects_start = self.effects.len();
-        let opened_at = self.raw_opened_at.unwrap_or(closed_at);
-        let raw_frame = Frame {
+    fn advance_pending_raw_close(&mut self) -> Result<(), EngineError> {
+        self.ensure_pending_raw_frame();
+
+        let raw_frame = self
+            .pending_raw_close
+            .as_ref()
+            .and_then(|pending| pending.raw_frame.clone())
+            .expect("pending close has raw frame");
+        let closed_at = raw_frame.closed_at;
+
+        if self
+            .pending_raw_close
+            .as_ref()
+            .is_some_and(|pending| pending.metric_frame.is_none())
+        {
+            let (metric_frame, diagnostics) =
+                self.build_stage_frame(raw_frame.clone(), StageKind::Metric, closed_at)?;
+            let pending = self
+                .pending_raw_close
+                .as_mut()
+                .expect("pending close exists");
+            pending.metric_frame = Some(metric_frame);
+            pending.metric_diagnostics = diagnostics;
+        }
+
+        if self
+            .pending_raw_close
+            .as_ref()
+            .is_some_and(|pending| !pending.raw_persisted)
+        {
+            self.store.append_frame(raw_frame.clone())?;
+            self.pending_raw_close
+                .as_mut()
+                .expect("pending close exists")
+                .raw_persisted = true;
+        }
+
+        let metric_frame = self
+            .pending_raw_close
+            .as_ref()
+            .and_then(|pending| pending.metric_frame.clone())
+            .expect("pending close has metric frame");
+
+        if self
+            .pending_raw_close
+            .as_ref()
+            .is_some_and(|pending| !pending.metric_persisted)
+        {
+            self.store.append_frame(metric_frame.clone())?;
+            self.pending_raw_close
+                .as_mut()
+                .expect("pending close exists")
+                .metric_persisted = true;
+        }
+
+        if self
+            .pending_raw_close
+            .as_ref()
+            .is_some_and(|pending| pending.event_frame.is_none())
+        {
+            let (event_frame, diagnostics) =
+                self.build_stage_frame(metric_frame.clone(), StageKind::Event, closed_at)?;
+            let pending = self
+                .pending_raw_close
+                .as_mut()
+                .expect("pending close exists");
+            pending.event_frame = Some(event_frame);
+            pending.event_diagnostics = diagnostics;
+        }
+
+        let event_frame = self
+            .pending_raw_close
+            .as_ref()
+            .and_then(|pending| pending.event_frame.clone())
+            .expect("pending close has event frame");
+
+        if self
+            .pending_raw_close
+            .as_ref()
+            .is_some_and(|pending| !pending.event_persisted)
+        {
+            self.store.append_frame(event_frame.clone())?;
+            self.pending_raw_close
+                .as_mut()
+                .expect("pending close exists")
+                .event_persisted = true;
+        }
+
+        let completed = self
+            .pending_raw_close
+            .take()
+            .expect("completed pending close exists");
+        self.push_success_diagnostics(&StageKind::Metric, &completed.metric_diagnostics);
+        self.push_success_diagnostics(&StageKind::Event, &completed.event_diagnostics);
+        self.effects
+            .push(EngineEffect::FrameClosed { frame: raw_frame });
+        self.effects.push(EngineEffect::FrameClosed {
+            frame: metric_frame,
+        });
+        self.effects
+            .push(EngineEffect::FrameClosed { frame: event_frame });
+        self.raw_records.clear();
+        self.next_frame_no += 1;
+        self.raw_opened_at = None;
+
+        Ok(())
+    }
+
+    fn ensure_pending_raw_frame(&mut self) {
+        let pending = self
+            .pending_raw_close
+            .as_mut()
+            .expect("pending close exists");
+        if pending.raw_frame.is_some() {
+            return;
+        }
+
+        let opened_at = self.raw_opened_at.unwrap_or(pending.closed_at);
+        pending.raw_frame = Some(Frame {
             lane_id: self.config.lane_id.clone(),
             stage: StageKind::Raw,
             frame_no: self.next_frame_no,
             opened_at,
-            closed_at,
-            trigger_kind,
+            closed_at: pending.closed_at,
+            trigger_kind: pending.trigger_kind.clone(),
             record_count: self.raw_records.len() as u32,
             records: self.raw_records.clone(),
             summary: serde_json::json!({}),
-        };
-
-        let result = (|| {
-            let metric_frame = self.run_metric_stage(raw_frame.clone(), closed_at)?;
-            let event_frame = self.run_event_stage(metric_frame.clone(), closed_at)?;
-            self.store.append_frames(vec![
-                raw_frame.clone(),
-                metric_frame.clone(),
-                event_frame.clone(),
-            ])?;
-            self.effects
-                .push(EngineEffect::FrameClosed { frame: raw_frame });
-            self.effects.push(EngineEffect::FrameClosed {
-                frame: metric_frame,
-            });
-            self.effects
-                .push(EngineEffect::FrameClosed { frame: event_frame });
-            Ok(())
-        })();
-
-        if result.is_err() {
-            self.effects.truncate(effects_start);
-        } else {
-            self.raw_records.clear();
-            self.next_frame_no += 1;
-            self.raw_opened_at = None;
-            self.pending_raw_close = None;
-        }
-
-        result
+        });
     }
 
     fn run_stage(
@@ -260,25 +370,33 @@ where
         target_stage: StageKind,
         now: DateTime<Utc>,
     ) -> Result<Frame, EngineError> {
+        let (frame, diagnostics) =
+            self.build_stage_frame(upstream_frame, target_stage.clone(), now)?;
+        self.push_success_diagnostics(&target_stage, &diagnostics);
+        Ok(frame)
+    }
+
+    fn build_stage_frame(
+        &self,
+        upstream_frame: Frame,
+        target_stage: StageKind,
+        now: DateTime<Utc>,
+    ) -> Result<(Frame, Vec<Diagnostic>), EngineError> {
         let mode = match target_stage {
             StageKind::Raw => StageMode::Builtin,
             StageKind::Metric => self.config.metric_stage.mode.clone(),
             StageKind::Event => self.config.event_stage.mode.clone(),
         };
 
-        let records = match mode {
-            StageMode::Passthrough => upstream_frame.records.clone(),
-            StageMode::Empty => {
-                self.effects.push(EngineEffect::StageDiagnostic {
-                    stage: target_stage.clone(),
-                    status: StageDiagnosticStatus::Succeeded,
-                    diagnostic: Diagnostic {
-                        path: stage_path(&target_stage),
-                        message: "empty stage produced zero records".into(),
-                    },
-                });
-                Vec::new()
-            }
+        let (records, diagnostics) = match mode {
+            StageMode::Passthrough => (upstream_frame.records.clone(), Vec::new()),
+            StageMode::Empty => (
+                Vec::new(),
+                vec![Diagnostic {
+                    path: stage_path(&target_stage),
+                    message: "empty stage produced zero records".into(),
+                }],
+            ),
             StageMode::Script | StageMode::Builtin => {
                 let history = self.store.load_history(HistoryRequest {
                     lane_id: self.config.lane_id.clone(),
@@ -293,28 +411,34 @@ where
                     lane: self.config.clone(),
                     now,
                 })?;
-                for diagnostic in &result.diagnostics {
-                    self.effects.push(EngineEffect::StageDiagnostic {
-                        stage: target_stage.clone(),
-                        status: StageDiagnosticStatus::Succeeded,
-                        diagnostic: diagnostic.clone(),
-                    });
-                }
-                result.records
+                (result.records, result.diagnostics)
             }
         };
 
-        Ok(Frame {
-            lane_id: upstream_frame.lane_id,
-            stage: target_stage,
-            frame_no: upstream_frame.frame_no,
-            opened_at: upstream_frame.opened_at,
-            closed_at: now,
-            trigger_kind: upstream_frame.trigger_kind,
-            record_count: records.len() as u32,
-            records,
-            summary: serde_json::json!({}),
-        })
+        Ok((
+            Frame {
+                lane_id: upstream_frame.lane_id,
+                stage: target_stage,
+                frame_no: upstream_frame.frame_no,
+                opened_at: upstream_frame.opened_at,
+                closed_at: now,
+                trigger_kind: upstream_frame.trigger_kind,
+                record_count: records.len() as u32,
+                records,
+                summary: serde_json::json!({}),
+            },
+            diagnostics,
+        ))
+    }
+
+    fn push_success_diagnostics(&mut self, stage: &StageKind, diagnostics: &[Diagnostic]) {
+        for diagnostic in diagnostics {
+            self.effects.push(EngineEffect::StageDiagnostic {
+                stage: stage.clone(),
+                status: StageDiagnosticStatus::Succeeded,
+                diagnostic: diagnostic.clone(),
+            });
+        }
     }
 }
 
