@@ -7,8 +7,9 @@ use contract_helpers::{
     RunnerProbe, StoreProbe, assert_record_ids, assert_same_history, assert_trigger, closed_frame,
     closed_frames, empty_history, frame, instant, metric_empty_lane_config,
     metric_passthrough_lane_config, raw_record, script_lane_config, stage_history, stage_result,
-    successful_stage_diagnostics,
+    stage_result_with_diagnostics, successful_stage_diagnostics,
 };
+use lanedeck_protocol::Diagnostic;
 
 #[test]
 fn count_trigger_closes_raw_frame_exactly_when_record_count_reaches_limit() {
@@ -176,4 +177,46 @@ fn empty_mode_produces_zero_records_and_success_diagnostic() {
         successful_stage_diagnostics(&effects, StageKind::Metric).len(),
         1
     );
+}
+
+#[test]
+fn script_stage_diagnostics_are_emitted_as_engine_effects() {
+    let now = instant(1_700_006_000);
+    let raw_frame = frame("raw", "count", vec![raw_record("raw:1", now)], 11, now, now);
+    let diagnostic = Diagnostic {
+        path: "metricStage.script".to_string(),
+        message: "slow metric stage".to_string(),
+    };
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted(vec![stage_result_with_diagnostics(
+        vec![raw_record("metric:1", now)],
+        vec![diagnostic.clone()],
+    )]);
+    let mut engine = LaneEngine::new(script_lane_config(10, 60), store, runner).unwrap();
+
+    let metric_frame = engine.run_metric_stage(raw_frame, now).unwrap();
+    let effects = engine.drain_effects();
+
+    assert_eq!(metric_frame.record_count, 1);
+    assert_eq!(
+        successful_stage_diagnostics(&effects, StageKind::Metric),
+        vec![&diagnostic]
+    );
+}
+
+#[test]
+fn failed_downstream_stage_does_not_leak_partial_effects() {
+    let opened_at = instant(1_700_007_000);
+    let second_record_at = instant(1_700_007_003);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted_results(vec![Err("metric exploded".to_string())]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    let result = engine.ingest_raw_record(raw_record("r2", second_record_at), second_record_at);
+
+    assert!(result.is_err());
+    assert!(engine.drain_effects().is_empty());
 }

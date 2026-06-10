@@ -151,6 +151,7 @@ where
         trigger_kind: TriggerKind,
         closed_at: DateTime<Utc>,
     ) -> Result<(), EngineError> {
+        let effects_start = self.effects.len();
         let opened_at = self.raw_opened_at.unwrap_or(closed_at);
         let raw_frame = Frame {
             lane_id: self.config.lane_id.clone(),
@@ -166,13 +167,20 @@ where
         self.next_frame_no += 1;
         self.raw_opened_at = None;
 
-        self.persist_and_emit(raw_frame.clone())?;
-        let metric_frame = self.run_metric_stage(raw_frame, closed_at)?;
-        self.persist_and_emit(metric_frame.clone())?;
-        let event_frame = self.run_event_stage(metric_frame, closed_at)?;
-        self.persist_and_emit(event_frame)?;
+        let result = (|| {
+            self.persist_and_emit(raw_frame.clone())?;
+            let metric_frame = self.run_metric_stage(raw_frame, closed_at)?;
+            self.persist_and_emit(metric_frame.clone())?;
+            let event_frame = self.run_event_stage(metric_frame, closed_at)?;
+            self.persist_and_emit(event_frame)?;
+            Ok(())
+        })();
 
-        Ok(())
+        if result.is_err() {
+            self.effects.truncate(effects_start);
+        }
+
+        result
     }
 
     fn run_stage(
@@ -211,6 +219,13 @@ where
                     lane: self.config.clone(),
                     now,
                 })?;
+                for diagnostic in &result.diagnostics {
+                    self.effects.push(EngineEffect::StageDiagnostic {
+                        stage: target_stage.clone(),
+                        status: StageDiagnosticStatus::Succeeded,
+                        diagnostic: diagnostic.clone(),
+                    });
+                }
                 result.records
             }
         };

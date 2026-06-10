@@ -124,6 +124,16 @@ pub fn stage_result(records: Vec<FrameRecord>) -> StageResult {
     }))
 }
 
+pub fn stage_result_with_diagnostics(
+    records: Vec<FrameRecord>,
+    diagnostics: Vec<Diagnostic>,
+) -> StageResult {
+    from_json(json!({
+        "records": records,
+        "diagnostics": diagnostics
+    }))
+}
+
 #[derive(Clone)]
 pub struct StoreProbe {
     inner: Rc<RefCell<StoreProbeState>>,
@@ -160,11 +170,20 @@ pub struct RunnerProbe {
 #[derive(Clone)]
 struct RunnerProbeState {
     invocations: Vec<StageInvocation>,
-    scripted_results: Vec<StageResult>,
+    scripted_results: Vec<Result<StageResult, String>>,
 }
 
 impl RunnerProbe {
     pub fn scripted(scripted_results: Vec<StageResult>) -> Self {
+        Self::scripted_results(
+            scripted_results
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<Result<StageResult, String>>>(),
+        )
+    }
+
+    pub fn scripted_results(scripted_results: Vec<Result<StageResult, String>>) -> Self {
         Self {
             inner: Rc::new(RefCell::new(RunnerProbeState {
                 invocations: Vec::new(),
@@ -187,9 +206,9 @@ impl StageRunner for RunnerProbe {
             .scripted_results
             .get(inner.invocations.len() - 1)
             .cloned()
-            .unwrap_or_else(|| stage_result(invocation.current_frame.records.clone()));
+            .unwrap_or_else(|| Ok(stage_result(invocation.current_frame.records.clone())));
 
-        Ok(result)
+        result.map_err(EngineError::Runner)
     }
 }
 
