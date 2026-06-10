@@ -301,6 +301,10 @@ impl ProtocolParser {
 
     fn timestamp(&mut self, value: Option<&serde_json::Value>, path: &str) -> DateTime<Utc> {
         let value = self.string(value, path);
+        if !is_strict_rfc3339_date_time(&value) {
+            self.add(path, "expected RFC 3339 timestamp");
+            return DateTime::<Utc>::UNIX_EPOCH;
+        }
         match DateTime::parse_from_rfc3339(&value) {
             Ok(value) => value.with_timezone(&Utc),
             Err(_) => {
@@ -363,4 +367,104 @@ fn path_child(parent: &str, child: &str) -> String {
     } else {
         format!("{parent}.{child}")
     }
+}
+
+fn is_strict_rfc3339_date_time(value: &str) -> bool {
+    if !value.is_ascii() {
+        return false;
+    }
+    let Some((date, rest)) = value.split_once('T') else {
+        return false;
+    };
+    let Some((time, offset)) = split_time_and_offset(rest) else {
+        return false;
+    };
+    let Some((year, month, day)) = parse_date(date) else {
+        return false;
+    };
+    let Some((hour, minute, second)) = parse_time(time) else {
+        return false;
+    };
+
+    if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+
+    if day == 0 || day > days_in_month(year, month) {
+        return false;
+    }
+
+    match offset {
+        "Z" => true,
+        _ => parse_offset(offset).is_some(),
+    }
+}
+
+fn split_time_and_offset(value: &str) -> Option<(&str, &str)> {
+    if let Some(time) = value.strip_suffix('Z') {
+        return Some((time, "Z"));
+    }
+    let plus = value.rfind('+');
+    let minus = value.rfind('-');
+    let index = plus.or(minus)?;
+    Some((&value[..index], &value[index..]))
+}
+
+fn parse_date(value: &str) -> Option<(i32, u32, u32)> {
+    if value.len() != 10 || &value[4..5] != "-" || &value[7..8] != "-" {
+        return None;
+    }
+    Some((
+        value[0..4].parse().ok()?,
+        value[5..7].parse().ok()?,
+        value[8..10].parse().ok()?,
+    ))
+}
+
+fn parse_time(value: &str) -> Option<(u32, u32, u32)> {
+    if value.len() < 8 || &value[2..3] != ":" || &value[5..6] != ":" {
+        return None;
+    }
+    let second_end = if value.len() == 8 {
+        8
+    } else {
+        if &value[8..9] != "."
+            || value[9..].is_empty()
+            || !value[9..].bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        8
+    };
+    Some((
+        value[0..2].parse().ok()?,
+        value[3..5].parse().ok()?,
+        value[6..second_end].parse().ok()?,
+    ))
+}
+
+fn parse_offset(value: &str) -> Option<(u32, u32)> {
+    if value.len() != 6 || (&value[0..1] != "+" && &value[0..1] != "-") || &value[3..4] != ":" {
+        return None;
+    }
+    let hour: u32 = value[1..3].parse().ok()?;
+    let minute: u32 = value[4..6].parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some((hour, minute))
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }

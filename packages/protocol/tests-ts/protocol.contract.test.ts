@@ -214,4 +214,16 @@ describe("protocol wire contract", () => {
       }),
     ).toThrow(ProtocolError);
   });
+
+  it("rejects cyclic JSON-shaped payloads with protocol diagnostics", () => {
+    const payload: Record<string, unknown> = {};
+    payload.self = payload;
+
+    expect(() =>
+      parseShellContentMessage({
+        type: "ready",
+        payload,
+      }),
+    ).toThrow(ProtocolError);
+  });
 });

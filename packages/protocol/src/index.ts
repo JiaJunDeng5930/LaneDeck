@@ -344,6 +344,7 @@ function joinPath(parent: string, child: string): string {
 
 class Validator {
   readonly diagnostics: Diagnostic[] = [];
+  readonly activeJsonContainers = new WeakSet<object>();
 
   object(input: unknown, path: string): Record<string, unknown> {
     if (isPlainJsonObject(input)) {
@@ -355,9 +356,15 @@ class Validator {
 
   jsonObject(input: unknown, path: string): JsonObject {
     const object = this.object(input, path);
+    if (this.activeJsonContainers.has(object)) {
+      this.add(path, "expected acyclic JSON object");
+      return {};
+    }
+    this.activeJsonContainers.add(object);
     for (const [key, value] of Object.entries(object)) {
       this.jsonValue(value, joinPath(path, key));
     }
+    this.activeJsonContainers.delete(object);
     return object as JsonObject;
   }
 
@@ -377,9 +384,16 @@ class Validator {
       return null;
     }
     if (Array.isArray(input)) {
-      return input.map((item, index) =>
+      if (this.activeJsonContainers.has(input)) {
+        this.add(path, "expected acyclic JSON array");
+        return [];
+      }
+      this.activeJsonContainers.add(input);
+      const values = input.map((item, index) =>
         this.jsonValue(item, `${path}.${index}`),
       );
+      this.activeJsonContainers.delete(input);
+      return values;
     }
     if (typeof input === "object") {
       return this.jsonObject(input, path);

@@ -134,6 +134,30 @@ fn rejects_missing_required_field_with_field_diagnostic() {
 }
 
 #[test]
+fn rejects_timestamp_outside_shared_strict_shape() {
+    for timestamp in [
+        "2026-06-10t10:00:00z",
+        "2026-06-10 10:00:00Z",
+        "2026-06-10T10:00:60Z",
+    ] {
+        let mut value = valid_count_frame();
+        value["openedAt"] = json!(timestamp);
+
+        let error = parse_frame_json(value).expect_err("timestamp should fail");
+
+        match error {
+            ProtocolError::Validation { diagnostics } => {
+                assert!(
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.path == "openedAt")
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn rejects_record_count_that_differs_from_records_length() {
     let mut value = valid_count_frame();
     value["recordCount"] = json!(0);
