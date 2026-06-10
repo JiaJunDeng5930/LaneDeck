@@ -198,6 +198,17 @@ describe("protocol wire contract", () => {
     ).toThrow(ProtocolError);
   });
 
+  it("rejects sparse arrays in protocol payloads", () => {
+    expect(() =>
+      parseIngestBatch({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        batchId: "batch-1",
+        frames: new Array(1),
+      }),
+    ).toThrow(ProtocolError);
+  });
+
   it.each([
     { type: "ready", payload: {} },
     { type: "pick_result", payload: { pickId: "content.home" } },

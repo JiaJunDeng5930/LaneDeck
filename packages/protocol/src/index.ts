@@ -389,7 +389,8 @@ class Validator {
         return [];
       }
       this.activeJsonContainers.add(input);
-      const values = input.map((item, index) =>
+      const denseInput = this.array(input, path);
+      const values = denseInput.map((item, index) =>
         this.jsonValue(item, `${path}.${index}`),
       );
       this.activeJsonContainers.delete(input);
@@ -448,7 +449,12 @@ class Validator {
 
   array(input: unknown, path: string): unknown[] {
     if (Array.isArray(input)) {
-      return input;
+      for (let index = 0; index < input.length; index += 1) {
+        if (!(index in input)) {
+          this.add(`${path}.${index}`, "expected array element");
+        }
+      }
+      return Array.from(input);
     }
     this.add(path, "expected array");
     return [];
