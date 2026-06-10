@@ -316,7 +316,7 @@ impl ProtocolParser {
     }
 
     fn u64(&mut self, value: Option<&serde_json::Value>, path: &str) -> u64 {
-        match value.and_then(serde_json::Value::as_u64) {
+        match value.and_then(json_number_to_u64) {
             Some(value) if value <= JS_MAX_SAFE_INTEGER => value,
             None => {
                 self.add(path, "expected unsigned integer");
@@ -330,7 +330,7 @@ impl ProtocolParser {
     }
 
     fn u32(&mut self, value: Option<&serde_json::Value>, path: &str) -> u32 {
-        match value.and_then(serde_json::Value::as_u64) {
+        match value.and_then(json_number_to_u64) {
             Some(value) if value <= u32::MAX as u64 => value as u32,
             _ => {
                 self.add(path, "expected unsigned 32-bit integer");
@@ -406,6 +406,25 @@ fn path_child(parent: &str, child: &str) -> String {
         child.to_string()
     } else {
         format!("{parent}.{child}")
+    }
+}
+
+fn json_number_to_u64(value: &serde_json::Value) -> Option<u64> {
+    let serde_json::Value::Number(number) = value else {
+        return None;
+    };
+    if let Some(value) = number.as_u64() {
+        return Some(value);
+    }
+    let value = number.as_f64()?;
+    if value.is_finite()
+        && value >= 0.0
+        && value <= JS_MAX_SAFE_INTEGER as f64
+        && value.fract() == 0.0
+    {
+        Some(value as u64)
+    } else {
+        None
     }
 }
 

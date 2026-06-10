@@ -44,6 +44,18 @@ fn accepts_minimal_count_triggered_frame() {
 }
 
 #[test]
+fn accepts_zero_fraction_json_numbers_for_integer_fields() {
+    let mut value = valid_count_frame();
+    value["frameNo"] = json!(1.0);
+    value["recordCount"] = json!(1e0);
+
+    let frame = parse_frame_json(value).expect("zero-fraction numbers are shared integers");
+
+    assert_eq!(frame.frame_no, 1);
+    assert_eq!(frame.record_count, 1);
+}
+
+#[test]
 fn accepts_time_triggered_empty_frame() {
     let mut value = valid_count_frame();
     value["frameNo"] = json!(2);
