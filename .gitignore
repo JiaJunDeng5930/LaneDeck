@@ -1,0 +1,16 @@
+node_modules/
+target/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+.wrangler/
+.turbo/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*
+!.env.example

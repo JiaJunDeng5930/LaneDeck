@@ -1,0 +1,38 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "lanedeck-center",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_COORDINATOR",
+        "class_name": "WorkspaceCoordinator",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WorkspaceCoordinator"],
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "LANEDECK_DB",
+      "database_name": "lanedeck",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "LANEDECK_BUCKET",
+      "bucket_name": "lanedeck",
+    },
+  ],
+}
