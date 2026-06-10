@@ -156,6 +156,30 @@ where
                 self.runner.run_script(request)?;
                 Ok(ControlReply::accepted("build_content"))
             }
+            ControlMessage::ApplyLocalChange { path, body } => {
+                let cwd = path
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let command = serde_json::to_string(&serde_json::json!({
+                    "type": "apply_local_change",
+                    "path": path,
+                    "body": body,
+                }))
+                .map_err(|error| AgentError::script(error.to_string()))?;
+                let request = ScriptRunRequest {
+                    purpose: ScriptPurpose::ApplyLocalChange,
+                    lane_id: "content.local".to_string(),
+                    command,
+                    cwd: cwd.into(),
+                    timeout: Duration::seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
+                    capture_stdout: true,
+                    capture_stderr: true,
+                    side_effect_policy: ScriptSideEffectPolicy::LocalContentWriteBoundary,
+                };
+                self.runner.run_script(request)?;
+                Ok(ControlReply::accepted("apply_local_change"))
+            }
             ControlMessage::Heartbeat => Ok(ControlReply::accepted("heartbeat")),
             ControlMessage::Unknown { message_type } => Ok(ControlReply::accepted(message_type)),
         }

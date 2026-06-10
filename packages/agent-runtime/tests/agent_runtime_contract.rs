@@ -3,6 +3,7 @@ mod contract_helpers;
 use lanedeck_agent_runtime::{
     AgentService, ControlMessage, ControlReply, ScriptPurpose, ScriptSideEffectPolicy, SpoolEntryId,
 };
+use serde_json::json;
 
 use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, content_root, duration, ingest_batch, instant,
@@ -125,6 +126,37 @@ async fn build_content_control_message_calls_content_build_handler() {
     assert_eq!(
         request.command,
         "corepack pnpm --filter @lanedeck/content build"
+    );
+}
+
+#[tokio::test]
+async fn apply_local_change_control_message_calls_local_content_write_handler() {
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner =
+        ScriptRunnerProbe::with_outputs(vec![successful_script_output(instant(1_700_014_500))]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+    let path = content_root().join("pages/dashboard.json");
+
+    let reply = service
+        .handle_control_message(ControlMessage::apply_local_change(
+            path.clone(),
+            json!({"title": "updated dashboard"}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(reply, ControlReply::accepted("apply_local_change"));
+    let request = runner.requests().remove(0);
+    assert_eq!(request.purpose, ScriptPurpose::ApplyLocalChange);
+    assert_eq!(request.cwd, content_root().join("pages"));
+    assert!(request.command.contains("apply_local_change"));
+    assert!(request.command.contains("dashboard.json"));
+    assert!(request.command.contains("updated dashboard"));
+    assert_eq!(
+        request.side_effect_policy,
+        ScriptSideEffectPolicy::LocalContentWriteBoundary
     );
 }
 
