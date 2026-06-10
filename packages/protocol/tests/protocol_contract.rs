@@ -174,3 +174,21 @@ fn rejects_record_count_that_differs_from_records_length() {
         }
     }
 }
+
+#[test]
+fn rejects_frame_no_outside_shared_safe_integer_range() {
+    let mut value = valid_count_frame();
+    value["frameNo"] = json!(9_007_199_254_740_992_u64);
+
+    let error = parse_frame_json(value).expect_err("frameNo should fit JavaScript safe integer");
+
+    match error {
+        ProtocolError::Validation { diagnostics } => {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path == "frameNo")
+            );
+        }
+    }
+}

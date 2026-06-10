@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const PACKAGE_NAME: &str = "lanedeck-protocol";
+const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -281,9 +282,13 @@ impl ProtocolParser {
 
     fn u64(&mut self, value: Option<&serde_json::Value>, path: &str) -> u64 {
         match value.and_then(serde_json::Value::as_u64) {
-            Some(value) => value,
+            Some(value) if value <= JS_MAX_SAFE_INTEGER => value,
             None => {
                 self.add(path, "expected unsigned integer");
+                0
+            }
+            Some(_) => {
+                self.add(path, "expected JavaScript safe unsigned integer");
                 0
             }
         }
