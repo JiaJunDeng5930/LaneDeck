@@ -1,0 +1,205 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  QueryRequest,
+  QueryResponse,
+  ShellContentMessage,
+} from "@lanedeck/protocol";
+
+import {
+  createContentApp,
+  registerPickTarget,
+  type CenterQueryClient,
+  type ShellBridge,
+  type ShellInitMessage,
+} from "../src/index";
+
+describe("content package contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends ready after shell init", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+
+    await app.init();
+
+    expect(shell.messages).toContainEqual(
+      expect.objectContaining({ type: "ready" }),
+    );
+    app.dispose();
+  });
+
+  it("queries dashboard data and renders the result", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const query = new FakeQuery({
+      rows: [
+        {
+          pickId: "content/source/dashboard.tsx:14",
+          laneId: "lane.build",
+          eventText: "build complete",
+          triggerKind: "count",
+        },
+      ],
+      diagnostics: [],
+    });
+    const app = createContentApp({
+      query,
+      shell: new FakeShell({ hostState: { pickerEnabled: false } }),
+    });
+
+    await app.render({
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.build",
+    });
+
+    expect(query.requests).toEqual([
+      {
+        workspaceId: "workspace.local",
+        query: "dashboard",
+        params: { laneId: "lane.build" },
+      },
+    ]);
+    expect(document.root.innerHTML).toContain("build complete");
+    expect(document.root.innerHTML).toContain("lane.build");
+    app.dispose();
+  });
+
+  it("emits a source-level pick id for a registered target", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: true },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const target = new TestPickElement();
+
+    await app.init();
+    const registration = registerPickTarget({
+      pickId: "content/source/dashboard.tsx:44",
+      element: target as unknown as HTMLElement,
+    });
+    target.dispatch("click");
+
+    expect(shell.messages).toContainEqual({
+      type: "pick_result",
+      payload: { pickId: "content/source/dashboard.tsx:44" },
+    });
+
+    registration.unregister();
+    app.dispose();
+  });
+
+  it("reports query failure through the shell protocol", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const app = createContentApp({
+      query: new RejectingQuery(),
+      shell,
+    });
+
+    await app.render({ view: "dashboard", workspaceId: "workspace.local" });
+
+    expect(shell.messages).toContainEqual(
+      expect.objectContaining({
+        type: "error_report",
+        payload: expect.objectContaining({
+          message: "content render failed",
+        }),
+      }),
+    );
+    expect(document.root.innerHTML).toContain("content render failed");
+    app.dispose();
+  });
+});
+
+class FakeQuery implements CenterQueryClient {
+  readonly requests: QueryRequest[] = [];
+
+  constructor(private readonly response: QueryResponse) {}
+
+  async query(request: QueryRequest): Promise<QueryResponse> {
+    this.requests.push(request);
+    return this.response;
+  }
+}
+
+class RejectingQuery implements CenterQueryClient {
+  async query(_request: QueryRequest): Promise<QueryResponse> {
+    throw new Error("center unavailable");
+  }
+}
+
+class FakeShell implements ShellBridge {
+  readonly messages: ShellContentMessage[] = [];
+
+  constructor(private readonly initMessage: ShellInitMessage) {}
+
+  async waitForInit(): Promise<ShellInitMessage> {
+    return this.initMessage;
+  }
+
+  async send(message: ShellContentMessage): Promise<void> {
+    this.messages.push(message);
+  }
+}
+
+class TestDocument {
+  readonly root = new TestRootElement();
+
+  getElementById(id: string): TestRootElement | null {
+    return id === "root" ? this.root : null;
+  }
+}
+
+class TestRootElement {
+  innerHTML = "";
+
+  querySelectorAll(): HTMLElement[] {
+    return [];
+  }
+}
+
+class TestPickElement {
+  readonly listeners = new Map<string, EventListener>();
+  readonly attributes = new Map<string, string>();
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
+
+  addEventListener(name: string, listener: EventListener): void {
+    this.listeners.set(name, listener);
+  }
+
+  removeEventListener(name: string): void {
+    this.listeners.delete(name);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
+  dispatch(name: string): void {
+    this.listeners.get(name)?.({
+      preventDefault() {
+        return;
+      },
+    } as Event);
+  }
+}
