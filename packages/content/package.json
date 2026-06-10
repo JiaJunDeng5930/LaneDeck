@@ -9,7 +9,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint src --ext .ts,.tsx",
-    "format": "prettier --check ."
+    "format": "prettier --check . --ignore-path ../../.prettierignore"
   },
   "dependencies": {
     "@lanedeck/protocol": "workspace:*",

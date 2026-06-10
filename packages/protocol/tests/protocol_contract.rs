@@ -132,3 +132,21 @@ fn rejects_missing_required_field_with_field_diagnostic() {
         }
     }
 }
+
+#[test]
+fn rejects_record_count_that_differs_from_records_length() {
+    let mut value = valid_count_frame();
+    value["recordCount"] = json!(0);
+
+    let error = parse_frame_json(value).expect_err("recordCount should match records length");
+
+    match error {
+        ProtocolError::Validation { diagnostics } => {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path == "recordCount")
+            );
+        }
+    }
+}

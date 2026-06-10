@@ -95,10 +95,25 @@ export interface MutationRequest {
   payload: JsonObject;
 }
 
-export interface MutationResult {
-  mutationId: string;
-  diagnostics: Diagnostic[];
-}
+export type MutationResult =
+  | {
+      mutation: "patch_content";
+      mutationId: string;
+      contentRevision: string;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      mutation: "patch_lane_config";
+      mutationId: string;
+      laneRevision: string;
+      diagnostics: Diagnostic[];
+    }
+  | {
+      mutation: "request_local_build";
+      mutationId: string;
+      buildRequestId: string;
+      diagnostics: Diagnostic[];
+    };
 
 export type ShellContentMessage =
   | {
@@ -275,6 +290,13 @@ function parseFrameWithValidator(
     .map((record, index) =>
       parseFrameRecord(record, joinPath(path, `records.${index}`), validator),
     );
+  const recordCount = validator.unsigned32(
+    object.recordCount,
+    joinPath(path, "recordCount"),
+  );
+  if (recordCount !== records.length) {
+    validator.add(joinPath(path, "recordCount"), "expected records length");
+  }
 
   return {
     laneId: validator.string(object.laneId, joinPath(path, "laneId")),
@@ -294,10 +316,7 @@ function parseFrameWithValidator(
       joinPath(path, "triggerKind"),
       ["count", "time"] as const,
     ),
-    recordCount: validator.unsigned32(
-      object.recordCount,
-      joinPath(path, "recordCount"),
-    ),
+    recordCount,
     records,
     summary: validator.jsonObject(object.summary, joinPath(path, "summary")),
   };

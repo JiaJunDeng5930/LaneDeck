@@ -6,7 +6,7 @@ import {
   parseIngestBatch,
   parseLaneConfig,
   parseShellContentMessage,
-} from "./index";
+} from "../src/index";
 
 const validCountFrame = {
   laneId: "lane.test-runtime",
@@ -90,6 +90,15 @@ describe("protocol frame contract", () => {
       parseFrame({
         ...validCountFrame,
         recordCount: 4_294_967_296,
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("rejects recordCount that differs from records length", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        recordCount: 0,
       }),
     ).toThrow(ProtocolError);
   });

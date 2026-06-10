@@ -200,6 +200,11 @@ impl ProtocolParser {
         let object = self.object(value, path);
         let records_path = path_child(path, "records");
         let records = self.records(object.get("records"), &records_path);
+        let record_count_path = path_child(path, "recordCount");
+        let record_count = self.u32(object.get("recordCount"), &record_count_path);
+        if record_count as usize != records.len() {
+            self.add(record_count_path.clone(), "expected records length");
+        }
         Frame {
             lane_id: self.string(object.get("laneId"), &path_child(path, "laneId")),
             stage: self.stage_kind(object.get("stage"), &path_child(path, "stage")),
@@ -208,7 +213,7 @@ impl ProtocolParser {
             closed_at: self.timestamp(object.get("closedAt"), &path_child(path, "closedAt")),
             trigger_kind: self
                 .trigger_kind(object.get("triggerKind"), &path_child(path, "triggerKind")),
-            record_count: self.u32(object.get("recordCount"), &path_child(path, "recordCount")),
+            record_count,
             records,
             summary: self.json_object(object.get("summary"), &path_child(path, "summary")),
         }
