@@ -1,5 +1,3 @@
-#![cfg(feature = "contract-tests")]
-
 mod contract_helpers;
 
 use lanedeck_lane_engine::LaneEngine;
