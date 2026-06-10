@@ -1,0 +1,103 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  ProtocolError,
+  parseFrame,
+  parseIngestBatch,
+  parseShellContentMessage,
+} from "./index";
+
+const validCountFrame = {
+  laneId: "lane.test-runtime",
+  stage: "raw",
+  frameNo: 1,
+  openedAt: "2026-06-10T10:00:00.000Z",
+  closedAt: "2026-06-10T10:00:05.000Z",
+  triggerKind: "count",
+  recordCount: 1,
+  records: [
+    {
+      id: "record-1",
+      observedAt: "2026-06-10T10:00:01.000Z",
+      body: { line: "ok" },
+    },
+  ],
+  summary: {},
+};
+
+describe("protocol frame contract", () => {
+  it("accepts a minimal count-triggered frame", () => {
+    expect(parseFrame(validCountFrame)).toMatchObject({
+      laneId: "lane.test-runtime",
+      triggerKind: "count",
+      recordCount: 1,
+    });
+  });
+
+  it("accepts a time-triggered empty frame", () => {
+    expect(
+      parseFrame({
+        ...validCountFrame,
+        frameNo: 2,
+        triggerKind: "time",
+        recordCount: 0,
+        records: [],
+      }),
+    ).toMatchObject({
+      triggerKind: "time",
+      recordCount: 0,
+      records: [],
+    });
+  });
+
+  it("rejects invalid trigger kind with a field diagnostic", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        triggerKind: "timer",
+      }),
+    ).toThrow(ProtocolError);
+
+    try {
+      parseFrame({ ...validCountFrame, triggerKind: "timer" });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProtocolError);
+      expect((error as ProtocolError).diagnostics).toContainEqual(
+        expect.objectContaining({ path: "triggerKind" }),
+      );
+    }
+  });
+});
+
+describe("protocol wire contract", () => {
+  it("accepts an ingest batch carrying count and time frames", () => {
+    expect(
+      parseIngestBatch({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        batchId: "batch-1",
+        frames: [
+          validCountFrame,
+          {
+            ...validCountFrame,
+            frameNo: 2,
+            triggerKind: "time",
+            recordCount: 0,
+            records: [],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      batchId: "batch-1",
+      frames: [{ triggerKind: "count" }, { triggerKind: "time" }],
+    });
+  });
+
+  it.each([
+    { type: "ready", payload: {} },
+    { type: "pick_result", payload: { pickId: "content.home" } },
+    { type: "error_report", payload: { message: "render failed" } },
+  ])("accepts shell-content message $type", (message) => {
+    expect(parseShellContentMessage(message)).toMatchObject(message);
+  });
+});
