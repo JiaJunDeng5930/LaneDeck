@@ -124,35 +124,301 @@ export class ProtocolError extends Error {
   }
 }
 
-export function parseLaneConfig(_input: unknown): LaneConfig {
-  throw unimplementedProtocolParser();
+export function parseLaneConfig(input: unknown): LaneConfig {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const lane: LaneConfig = {
+    laneId: validator.string(object.laneId, "laneId"),
+    displayName: validator.string(object.displayName, "displayName"),
+    rawStage: parseStageConfig(object.rawStage, "rawStage", validator),
+    metricStage: parseStageConfig(object.metricStage, "metricStage", validator),
+    eventStage: parseStageConfig(object.eventStage, "eventStage", validator),
+  };
+  validator.finish();
+  return lane;
 }
 
-export function parseFrame(_input: unknown): Frame {
-  throw unimplementedProtocolParser();
+export function parseFrame(input: unknown): Frame {
+  const validator = new Validator();
+  const frame = parseFrameWithValidator(input, "$", validator);
+  validator.finish();
+  return frame;
 }
 
-export function parseIngestBatch(_input: unknown): IngestBatch {
-  throw unimplementedProtocolParser();
+export function parseIngestBatch(input: unknown): IngestBatch {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const frames = validator
+    .array(object.frames, "frames")
+    .map((frame, index) =>
+      parseFrameWithValidator(frame, `frames.${index}`, validator),
+    );
+  const batch: IngestBatch = {
+    workspaceId: validator.string(object.workspaceId, "workspaceId"),
+    machineId: validator.string(object.machineId, "machineId"),
+    batchId: validator.string(object.batchId, "batchId"),
+    frames,
+  };
+  validator.finish();
+  return batch;
 }
 
-export function parseQueryRequest(_input: unknown): QueryRequest {
-  throw unimplementedProtocolParser();
+export function parseQueryRequest(input: unknown): QueryRequest {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const request: QueryRequest = {
+    workspaceId: validator.string(object.workspaceId, "workspaceId"),
+    query: validator.string(object.query, "query"),
+    params: validator.jsonObject(object.params, "params"),
+  };
+  validator.finish();
+  return request;
 }
 
-export function parseMutationRequest(_input: unknown): MutationRequest {
-  throw unimplementedProtocolParser();
+export function parseMutationRequest(input: unknown): MutationRequest {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const mutation = validator.oneOf(object.mutation, "mutation", [
+    "patch_content",
+    "patch_lane_config",
+    "request_local_build",
+  ] as const);
+  const request: MutationRequest = {
+    workspaceId: validator.string(object.workspaceId, "workspaceId"),
+    mutation,
+    payload: validator.jsonObject(object.payload, "payload"),
+  };
+  validator.finish();
+  return request;
 }
 
-export function parseShellContentMessage(_input: unknown): ShellContentMessage {
-  throw unimplementedProtocolParser();
+export function parseShellContentMessage(input: unknown): ShellContentMessage {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const type = validator.string(object.type, "type");
+  const payload = validator.object(object.payload, "payload");
+
+  if (type === "ready") {
+    const message: ShellContentMessage = {
+      type,
+      payload: validator.jsonObject(payload, "payload"),
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "pick_result") {
+    const message: ShellContentMessage = {
+      type,
+      payload: { pickId: validator.string(payload.pickId, "payload.pickId") },
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "error_report") {
+    const message: ShellContentMessage = {
+      type,
+      payload: {
+        message: validator.string(payload.message, "payload.message"),
+        ...(payload.detail === undefined
+          ? {}
+          : { detail: validator.string(payload.detail, "payload.detail") }),
+      },
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "height_changed") {
+    const message: ShellContentMessage = {
+      type,
+      payload: { height: validator.number(payload.height, "payload.height") },
+    };
+    validator.finish();
+    return message;
+  }
+
+  validator.add(
+    "type",
+    "expected ready, pick_result, error_report, or height_changed",
+  );
+  validator.finish();
+  throw new Error("unreachable");
 }
 
-function unimplementedProtocolParser(): ProtocolError {
-  return new ProtocolError([
-    {
-      path: "$",
-      message: "protocol parser is not implemented",
-    },
-  ]);
+function parseStageConfig(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): StageConfig {
+  const object = validator.object(input, path);
+  return {
+    mode: validator.oneOf(object.mode, `${path}.mode`, [
+      "script",
+      "passthrough",
+      "empty",
+      "builtin",
+    ] as const),
+    settings: validator.jsonObject(object.settings, `${path}.settings`),
+  };
+}
+
+function parseFrameWithValidator(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): Frame {
+  const object = validator.object(input, path);
+  const records = validator
+    .array(object.records, joinPath(path, "records"))
+    .map((record, index) =>
+      parseFrameRecord(record, joinPath(path, `records.${index}`), validator),
+    );
+
+  return {
+    laneId: validator.string(object.laneId, joinPath(path, "laneId")),
+    stage: validator.oneOf(object.stage, joinPath(path, "stage"), [
+      "raw",
+      "metric",
+      "event",
+    ] as const),
+    frameNo: validator.integer(object.frameNo, joinPath(path, "frameNo")),
+    openedAt: validator.timestamp(object.openedAt, joinPath(path, "openedAt")),
+    closedAt: validator.timestamp(object.closedAt, joinPath(path, "closedAt")),
+    triggerKind: validator.oneOf(
+      object.triggerKind,
+      joinPath(path, "triggerKind"),
+      ["count", "time"] as const,
+    ),
+    recordCount: validator.integer(
+      object.recordCount,
+      joinPath(path, "recordCount"),
+    ),
+    records,
+    summary: validator.jsonObject(object.summary, joinPath(path, "summary")),
+  };
+}
+
+function parseFrameRecord(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): FrameRecord {
+  const object = validator.object(input, path);
+  return {
+    id: validator.string(object.id, joinPath(path, "id")),
+    observedAt: validator.timestamp(
+      object.observedAt,
+      joinPath(path, "observedAt"),
+    ),
+    body: validator.jsonValue(object.body, joinPath(path, "body")),
+  };
+}
+
+function joinPath(parent: string, child: string): string {
+  return parent === "$" ? child : `${parent}.${child}`;
+}
+
+class Validator {
+  readonly diagnostics: Diagnostic[] = [];
+
+  object(input: unknown, path: string): Record<string, unknown> {
+    if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+      return input as Record<string, unknown>;
+    }
+    this.add(path, "expected object");
+    return {};
+  }
+
+  jsonObject(input: unknown, path: string): JsonObject {
+    const object = this.object(input, path);
+    for (const [key, value] of Object.entries(object)) {
+      this.jsonValue(value, joinPath(path, key));
+    }
+    return object as JsonObject;
+  }
+
+  jsonValue(input: unknown, path: string): JsonValue {
+    if (
+      input === null ||
+      typeof input === "string" ||
+      typeof input === "number" ||
+      typeof input === "boolean"
+    ) {
+      return input;
+    }
+    if (Array.isArray(input)) {
+      return input.map((item, index) =>
+        this.jsonValue(item, `${path}.${index}`),
+      );
+    }
+    if (typeof input === "object") {
+      return this.jsonObject(input, path);
+    }
+    this.add(path, "expected JSON value");
+    return null;
+  }
+
+  string(input: unknown, path: string): string {
+    if (typeof input === "string") {
+      return input;
+    }
+    this.add(path, "expected string");
+    return "";
+  }
+
+  number(input: unknown, path: string): number {
+    if (typeof input === "number" && Number.isFinite(input)) {
+      return input;
+    }
+    this.add(path, "expected number");
+    return 0;
+  }
+
+  integer(input: unknown, path: string): number {
+    if (Number.isInteger(input)) {
+      return input as number;
+    }
+    this.add(path, "expected integer");
+    return 0;
+  }
+
+  timestamp(input: unknown, path: string): string {
+    const value = this.string(input, path);
+    if (value !== "" && Number.isNaN(Date.parse(value))) {
+      this.add(path, "expected RFC 3339 timestamp");
+    }
+    return value;
+  }
+
+  array(input: unknown, path: string): unknown[] {
+    if (Array.isArray(input)) {
+      return input;
+    }
+    this.add(path, "expected array");
+    return [];
+  }
+
+  oneOf<T extends string>(
+    input: unknown,
+    path: string,
+    allowed: readonly T[],
+  ): T {
+    if (typeof input === "string" && allowed.includes(input as T)) {
+      return input as T;
+    }
+    this.add(path, `expected one of ${allowed.join(", ")}`);
+    return allowed[0];
+  }
+
+  add(path: string, message: string): void {
+    this.diagnostics.push({ path, message });
+  }
+
+  finish(): void {
+    if (this.diagnostics.length > 0) {
+      throw new ProtocolError(this.diagnostics);
+    }
+  }
 }
