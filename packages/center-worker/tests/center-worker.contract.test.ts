@@ -1,0 +1,328 @@
+import { describe, expect, it } from "vitest";
+
+import { LiveHub, type LiveSocket } from "../src/live";
+import { handleRequest } from "../src/router";
+import type {
+  CenterStorage,
+  ContentObjectKeys,
+  ContentObjectStore,
+  ContentObjectWrite,
+  ContentRevisionRecord,
+  LaneRevisionRecord,
+} from "../src/storage/types";
+import { WorkspaceService } from "../src/workspace";
+import type {
+  IngestBatch,
+  JsonObject,
+  MutationRequest,
+} from "@lanedeck/protocol";
+
+const validFrame = {
+  laneId: "lane.local",
+  stage: "event",
+  frameNo: 1,
+  openedAt: "2026-06-10T10:00:00.000Z",
+  closedAt: "2026-06-10T10:00:05.000Z",
+  triggerKind: "count",
+  recordCount: 1,
+  records: [
+    {
+      id: "record-1",
+      observedAt: "2026-06-10T10:00:01.000Z",
+      body: { text: "hello" },
+    },
+  ],
+  summary: { event: "hello" },
+} satisfies IngestBatch["frames"][number];
+
+describe("center-worker contract", () => {
+  it("POST /api/ingest persists structured rows and returns ack", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest("/api/ingest", {
+        workspaceId: "workspace.local",
+        machineId: "machine.local",
+        batchId: "batch-1",
+        frames: [validFrame],
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      batchId: "batch-1",
+      acceptedFrameCount: 1,
+      diagnostics: [],
+    });
+    expect(harness.storage.batches).toHaveLength(1);
+    expect(harness.storage.frames).toHaveLength(1);
+  });
+
+  it("invalid ingest payload returns validation diagnostics", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest("/api/ingest", {
+        workspaceId: "workspace.local",
+        machineId: "machine.local",
+        batchId: "batch-1",
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "protocol_validation_failed",
+      diagnostics: [expect.objectContaining({ path: "frames" })],
+    });
+  });
+
+  it("POST /api/query reads current state without mutation", async () => {
+    const harness = createHarness();
+    await harness.workspace.ingest({
+      workspaceId: "workspace.local",
+      machineId: "machine.local",
+      batchId: "batch-1",
+      frames: [validFrame],
+    });
+    const writesBeforeQuery = harness.storage.writeCount;
+
+    const response = await handleRequest(
+      jsonRequest("/api/query", {
+        workspaceId: "workspace.local",
+        query: "current_state",
+        params: {},
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      rows: [
+        {
+          workspaceId: "workspace.local",
+          frames: [expect.objectContaining({ batchId: "batch-1" })],
+        },
+      ],
+      diagnostics: [],
+    });
+    expect(harness.storage.writeCount).toBe(writesBeforeQuery);
+  });
+
+  it("POST /api/ai/mutation writes content source to R2 and metadata to D1", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest("/api/ai/mutation", {
+        workspaceId: "workspace.local",
+        mutation: "patch_content",
+        payload: {
+          path: "src/dashboard.tsx",
+          contentPath: "index.html",
+          source: "<h1>patched</h1>",
+          metadata: { pickId: "content.home" },
+        },
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      mutation: "patch_content",
+      mutationId: "id-1",
+      contentRevision: "id-2",
+      diagnostics: [],
+    });
+    expect(
+      harness.objects.writes.get(
+        "content-source/workspace.local/id-2/src/dashboard.tsx",
+      ),
+    ).toBe("<h1>patched</h1>");
+    expect(harness.objects.writes.get("content/id-2/index.html")).toBe(
+      "<h1>patched</h1>",
+    );
+    expect(harness.storage.contentRevisions).toEqual([
+      expect.objectContaining({
+        workspaceId: "workspace.local",
+        mutationId: "id-1",
+        revision: "id-2",
+        sourcePath: "src/dashboard.tsx",
+        contentPath: "index.html",
+      }),
+    ]);
+  });
+
+  it("browser WSS receives content_changed after content mutation", async () => {
+    const harness = createHarness();
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>live</main>",
+      },
+    });
+
+    expect(browser.decodedMessages()).toContainEqual(
+      expect.objectContaining({
+        type: "content_changed",
+        workspaceId: "workspace.local",
+        mutationId: "id-1",
+        contentRevision: "id-2",
+      }),
+    );
+  });
+
+  it("agent WSS receives build command when mutation requires local build", async () => {
+    const harness = createHarness();
+    const agent = new RecordingSocket();
+    harness.live.addAgent(agent);
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: { reason: "content_changed" },
+    });
+
+    expect(agent.decodedMessages()).toContainEqual({
+      type: "build_content",
+      workspaceId: "workspace.local",
+      mutationId: "id-1",
+      buildRequestId: "id-2",
+      payload: { reason: "content_changed" },
+    });
+  });
+});
+
+function createHarness() {
+  const storage = new MemoryCenterStorage();
+  const objects = new MemoryContentObjectStore();
+  const live = new LiveHub();
+  let nextId = 0;
+  const workspace = new WorkspaceService({
+    storage,
+    contentStore: objects,
+    live,
+    clock: () => "2026-06-10T10:00:00.000Z",
+    idGenerator: () => `id-${(nextId += 1).toString()}`,
+  });
+  const env = {
+    WORKSPACE_COORDINATOR: {
+      getByName: () => workspace,
+    },
+    LANEDECK_DB: {},
+    LANEDECK_BUCKET: {},
+  };
+
+  return { storage, objects, live, workspace, env };
+}
+
+function jsonRequest(path: string, body: JsonObject): Request {
+  return new Request(`https://center.local${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+class RecordingSocket implements LiveSocket {
+  readonly messages: string[] = [];
+
+  send(message: string): void {
+    this.messages.push(message);
+  }
+
+  decodedMessages(): JsonObject[] {
+    return this.messages.map((message) => JSON.parse(message) as JsonObject);
+  }
+}
+
+class MemoryContentObjectStore implements ContentObjectStore {
+  readonly writes = new Map<string, string>();
+
+  async writeContentSource(
+    write: ContentObjectWrite,
+  ): Promise<ContentObjectKeys> {
+    const sourceKey = [
+      "content-source",
+      write.workspaceId,
+      write.revision,
+      write.sourcePath,
+    ].join("/");
+    const assetKey = ["content", write.revision, write.contentPath].join("/");
+    this.writes.set(sourceKey, write.source);
+    this.writes.set(assetKey, write.source);
+    return { sourceKey, assetKey };
+  }
+}
+
+class MemoryCenterStorage implements CenterStorage {
+  readonly batches: IngestBatch[] = [];
+  readonly frames: IngestBatch["frames"] = [];
+  readonly contentRevisions: ContentRevisionRecord[] = [];
+  readonly mutations: MutationRequest[] = [];
+  readonly laneRevisions: LaneRevisionRecord[] = [];
+  writeCount = 0;
+
+  async initialize(): Promise<void> {}
+
+  async saveIngestBatch(batch: IngestBatch): Promise<void> {
+    this.writeCount += 1;
+    this.batches.push(batch);
+    this.frames.push(...batch.frames);
+  }
+
+  async getCurrentState(workspaceId: string): Promise<JsonObject> {
+    const currentContent =
+      this.contentRevisions[this.contentRevisions.length - 1] ?? null;
+    return {
+      workspaceId,
+      frames: this.batches.flatMap((batch) =>
+        batch.workspaceId === workspaceId
+          ? batch.frames.map((frame) => ({
+              batchId: batch.batchId,
+              laneId: frame.laneId,
+              stage: frame.stage,
+              frameNo: frame.frameNo,
+              triggerKind: frame.triggerKind,
+              recordCount: frame.recordCount,
+              summary: frame.summary,
+            }))
+          : [],
+      ),
+      currentContent:
+        currentContent === null
+          ? null
+          : {
+              revision: currentContent.revision,
+              sourcePath: currentContent.sourcePath,
+              contentPath: currentContent.contentPath,
+            },
+    };
+  }
+
+  async saveContentRevision(record: ContentRevisionRecord): Promise<void> {
+    this.writeCount += 1;
+    this.contentRevisions.push(record);
+  }
+
+  async getCurrentContent(
+    workspaceId: string,
+  ): Promise<ContentRevisionRecord | null> {
+    const records = this.contentRevisions.filter(
+      (record) => record.workspaceId === workspaceId,
+    );
+    return records[records.length - 1] ?? null;
+  }
+
+  async saveLaneRevision(record: LaneRevisionRecord): Promise<void> {
+    this.writeCount += 1;
+    this.laneRevisions.push(record);
+  }
+
+  async saveMutation(request: MutationRequest): Promise<void> {
+    this.writeCount += 1;
+    this.mutations.push(request);
+  }
+}
