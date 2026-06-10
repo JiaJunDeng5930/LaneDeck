@@ -5,7 +5,7 @@ import {
 } from "./index";
 
 const app = createContentApp({
-  query: createHttpCenterQueryClient({ endpoint: globalThis.location.origin }),
+  query: createHttpCenterQueryClient(),
   shell: createWindowShellBridge(),
 });
 

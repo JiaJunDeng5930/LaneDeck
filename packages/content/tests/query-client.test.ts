@@ -14,6 +14,7 @@ describe("center query client", () => {
     const client = createHttpCenterQueryClient({
       endpoint: "https://center.example.test/",
       fetch,
+      headers: new Headers([["authorization", "Bearer token"]]),
     });
 
     await expect(
@@ -29,15 +30,22 @@ describe("center query client", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "https://center.example.test/api/query",
-      {
+      expect.objectContaining({
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           workspaceId: "workspace.local",
           query: "dashboard",
           params: {},
         }),
-      },
+      }),
+    );
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.headers).toBeInstanceOf(Headers);
+    expect((init?.headers as Headers).get("authorization")).toBe(
+      "Bearer token",
+    );
+    expect((init?.headers as Headers).get("content-type")).toBe(
+      "application/json",
     );
   });
 
@@ -45,6 +53,20 @@ describe("center query client", () => {
     const client = createHttpCenterQueryClient({
       endpoint: "https://center.example.test",
       fetch: async () => Response.json({ rows: "bad", diagnostics: [] }),
+    });
+
+    await expect(
+      client.query({
+        workspaceId: "workspace.local",
+        query: "dashboard",
+        params: {},
+      }),
+    ).rejects.toBeInstanceOf(ContentError);
+  });
+
+  it("requires the shell-provided center endpoint before querying", async () => {
+    const client = createHttpCenterQueryClient({
+      fetch: async () => Response.json({ rows: [], diagnostics: [] }),
     });
 
     await expect(

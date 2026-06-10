@@ -43,7 +43,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     async init() {
       try {
         const init = await deps.shell.waitForInit();
-        hostState = init.hostState;
+        applyHostState(init.hostState);
         await send({
           type: "ready",
           payload: { package: protocolPackage },
@@ -75,7 +75,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     },
 
     setHostState(state) {
-      hostState = state;
+      applyHostState(state);
     },
 
     reportPickTarget(target) {
@@ -127,6 +127,13 @@ export function createContentApp(deps: ContentDeps): ContentApp {
       registration.unregister();
     }
     activeRegistrations = [];
+  }
+
+  function applyHostState(state: ShellHostState): void {
+    hostState = state;
+    if (state.centerQueryEndpoint !== undefined) {
+      deps.query.setEndpoint?.(state.centerQueryEndpoint);
+    }
   }
 
   return app;

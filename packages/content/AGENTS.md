@@ -12,4 +12,4 @@
 
 ## Runtime Model
 
-The app has three local collaborators: `query` for center reads, `shell` for iframe messages, and the document `#root` for rendered markup. Dashboard rows prefer `eventText`, then `text`, then `message`; pick ids prefer `pickId`, then `sourceId`, then a deterministic row id.
+The app has three local collaborators: `query` for center reads, `shell` for iframe messages, and the document `#root` for rendered markup. Shell init supplies `centerQueryEndpoint` for hosted iframe execution. Dashboard rows prefer `eventText`, then `text`, then `message`; pick ids prefer `pickId`, then `sourceId`, then a deterministic row id.

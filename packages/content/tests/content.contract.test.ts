@@ -7,6 +7,7 @@ import type {
 
 import {
   createContentApp,
+  createHttpCenterQueryClient,
   registerPickTarget,
   type CenterQueryClient,
   type ShellBridge,
@@ -72,6 +73,38 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("uses the shell-provided center endpoint for initial dashboard render", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          rows: [{ eventText: "shell boot render" }],
+          diagnostics: [],
+        }),
+    );
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        centerQueryEndpoint: "https://center.example.test/",
+        route: { view: "dashboard", workspaceId: "workspace.local" },
+      },
+    });
+    const app = createContentApp({
+      query: createHttpCenterQueryClient({ fetch }),
+      shell,
+    });
+
+    await app.init();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://center.example.test/api/query",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(document.root.innerHTML).toContain("shell boot render");
+    app.dispose();
+  });
+
   it("emits a source-level pick id for a registered target", async () => {
     const shell = new FakeShell({
       hostState: { pickerEnabled: true },
@@ -89,6 +122,7 @@ describe("content package contract", () => {
     });
     target.dispatch("click");
 
+    expect(target.stopPropagationCalls).toBe(1);
     expect(shell.messages).toContainEqual({
       type: "pick_result",
       payload: { pickId: "content/source/dashboard.tsx:44" },
@@ -174,6 +208,7 @@ class TestRootElement {
 class TestPickElement {
   readonly listeners = new Map<string, EventListener>();
   readonly attributes = new Map<string, string>();
+  stopPropagationCalls = 0;
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
@@ -199,6 +234,9 @@ class TestPickElement {
     this.listeners.get(name)?.({
       preventDefault() {
         return;
+      },
+      stopPropagation: () => {
+        this.stopPropagationCalls += 1;
       },
     } as Event);
   }

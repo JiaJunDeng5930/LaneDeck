@@ -23,6 +23,7 @@ export function registerPickTarget(target: PickTarget): PickRegistration {
   };
   const click = (event: Event) => {
     event.preventDefault();
+    event.stopPropagation();
     target.element.setAttribute("data-pick-state", "selected");
     notifyPickTarget(target);
     target.element.setAttribute("data-pick-state", "registered");

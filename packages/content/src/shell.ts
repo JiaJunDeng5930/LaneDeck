@@ -10,6 +10,7 @@ import type { ContentRoute } from "./query";
 export interface ShellHostState {
   pickerEnabled: boolean;
   workspaceId?: string;
+  centerQueryEndpoint?: string;
   contentRevision?: string;
   route?: ContentRoute;
 }
@@ -131,12 +132,14 @@ function parseHostState(input: unknown): ShellHostState {
   const state = recordAt({ state: input }, "state");
   const pickerEnabled = state.pickerEnabled === true;
   const workspaceId = optionalStringAt(state, "workspaceId");
+  const centerQueryEndpoint = optionalStringAt(state, "centerQueryEndpoint");
   const contentRevision = optionalStringAt(state, "contentRevision");
   const route = parseContentRoute(state.route);
 
   return {
     pickerEnabled,
     ...(workspaceId === undefined ? {} : { workspaceId }),
+    ...(centerQueryEndpoint === undefined ? {} : { centerQueryEndpoint }),
     ...(contentRevision === undefined ? {} : { contentRevision }),
     ...(route === undefined ? {} : { route }),
   };
