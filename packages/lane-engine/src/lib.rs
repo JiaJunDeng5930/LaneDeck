@@ -60,10 +60,17 @@ pub struct LaneEngine<S, R> {
     runner: R,
     raw_records: Vec<FrameRecord>,
     raw_opened_at: Option<DateTime<Utc>>,
+    pending_raw_close: Option<PendingRawClose>,
     next_frame_no: u64,
     max_records: usize,
     max_seconds: i64,
     effects: Vec<EngineEffect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingRawClose {
+    trigger_kind: TriggerKind,
+    closed_at: DateTime<Utc>,
 }
 
 impl<S, R> LaneEngine<S, R>
@@ -99,6 +106,7 @@ where
             runner,
             raw_records: Vec::new(),
             raw_opened_at: None,
+            pending_raw_close: None,
             next_frame_no: 1,
             max_records,
             max_seconds,
@@ -111,8 +119,10 @@ where
         record: FrameRecord,
         now: DateTime<Utc>,
     ) -> Result<Vec<EngineEffect>, EngineError> {
-        if self.raw_records.len() >= self.max_records {
-            self.close_raw_frame(TriggerKind::Count, now)?;
+        if self.pending_raw_close.is_some() {
+            self.retry_pending_raw_close()?;
+        } else if self.raw_records.len() >= self.max_records {
+            self.request_raw_close(TriggerKind::Count, now)?;
         }
 
         if self.raw_opened_at.is_none() {
@@ -121,13 +131,18 @@ where
         self.raw_records.push(record);
 
         if self.raw_records.len() >= self.max_records {
-            self.close_raw_frame(TriggerKind::Count, now)?;
+            self.request_raw_close(TriggerKind::Count, now)?;
         }
 
         Ok(self.drain_effects())
     }
 
     pub fn tick(&mut self, now: DateTime<Utc>) -> Result<Vec<EngineEffect>, EngineError> {
+        if self.pending_raw_close.is_some() {
+            self.retry_pending_raw_close()?;
+            return Ok(self.drain_effects());
+        }
+
         let opened_at = match self.raw_opened_at {
             Some(opened_at) => opened_at,
             None => {
@@ -136,8 +151,13 @@ where
             }
         };
 
+        if self.raw_records.len() >= self.max_records {
+            self.request_raw_close(TriggerKind::Count, now)?;
+            return Ok(self.drain_effects());
+        }
+
         if now.signed_duration_since(opened_at) >= Duration::seconds(self.max_seconds) {
-            self.close_raw_frame(TriggerKind::Time, now)?;
+            self.request_raw_close(TriggerKind::Time, now)?;
         }
 
         Ok(self.drain_effects())
@@ -161,6 +181,28 @@ where
 
     pub fn drain_effects(&mut self) -> Vec<EngineEffect> {
         std::mem::take(&mut self.effects)
+    }
+
+    fn request_raw_close(
+        &mut self,
+        trigger_kind: TriggerKind,
+        closed_at: DateTime<Utc>,
+    ) -> Result<(), EngineError> {
+        if self.pending_raw_close.is_none() {
+            self.pending_raw_close = Some(PendingRawClose {
+                trigger_kind,
+                closed_at,
+            });
+        }
+        self.retry_pending_raw_close()
+    }
+
+    fn retry_pending_raw_close(&mut self) -> Result<(), EngineError> {
+        let pending_close = match self.pending_raw_close.clone() {
+            Some(pending_close) => pending_close,
+            None => return Ok(()),
+        };
+        self.close_raw_frame(pending_close.trigger_kind, pending_close.closed_at)
     }
 
     fn close_raw_frame(
@@ -206,6 +248,7 @@ where
             self.raw_records.clear();
             self.next_frame_no += 1;
             self.raw_opened_at = None;
+            self.pending_raw_close = None;
         }
 
         result

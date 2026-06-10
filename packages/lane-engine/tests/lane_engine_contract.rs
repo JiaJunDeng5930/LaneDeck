@@ -307,6 +307,95 @@ fn failed_closure_keeps_raw_records_for_next_attempt() {
 
     assert_eq!(raw_frame.frame_no, 1);
     assert_record_ids(raw_frame, &["r1", "r2"]);
+    assert_trigger(raw_frame, TriggerKind::Count);
+    assert_eq!(raw_frame.closed_at, second_record_at);
+}
+
+#[test]
+fn failed_time_closure_is_retried_before_new_record_is_accepted() {
+    let opened_at = instant(1_700_009_100);
+    let deadline = opened_at + contract_helpers::seconds(60);
+    let retry_record_at = instant(1_700_009_163);
+    let second_new_record_at = instant(1_700_009_164);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted_results(vec![
+        Err("metric exploded".to_string()),
+        Ok(stage_result(vec![raw_record(
+            "metric:retry-time",
+            retry_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:retry-time",
+            retry_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "metric:new-count",
+            second_new_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:new-count",
+            second_new_record_at,
+        )])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    assert!(engine.tick(deadline).is_err());
+
+    let retry_effects = engine
+        .ingest_raw_record(raw_record("r2", retry_record_at), retry_record_at)
+        .unwrap();
+    let retried_frame = closed_frame(&retry_effects, StageKind::Raw);
+
+    assert_record_ids(retried_frame, &["r1"]);
+    assert_trigger(retried_frame, TriggerKind::Time);
+    assert_eq!(retried_frame.closed_at, deadline);
+
+    let next_effects = engine
+        .ingest_raw_record(raw_record("r3", second_new_record_at), second_new_record_at)
+        .unwrap();
+    let next_frame = closed_frame(&next_effects, StageKind::Raw);
+
+    assert_record_ids(next_frame, &["r2", "r3"]);
+    assert_trigger(next_frame, TriggerKind::Count);
+}
+
+#[test]
+fn failed_count_closure_is_retried_as_count_on_later_tick() {
+    let opened_at = instant(1_700_009_200);
+    let second_record_at = instant(1_700_009_203);
+    let later_tick = instant(1_700_009_300);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted_results(vec![
+        Err("metric exploded".to_string()),
+        Ok(stage_result(vec![raw_record(
+            "metric:retry-count",
+            later_tick,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:retry-count",
+            later_tick,
+        )])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    assert!(
+        engine
+            .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+            .is_err()
+    );
+
+    let effects = engine.tick(later_tick).unwrap();
+    let raw_frame = closed_frame(&effects, StageKind::Raw);
+
+    assert_record_ids(raw_frame, &["r1", "r2"]);
+    assert_trigger(raw_frame, TriggerKind::Count);
+    assert_eq!(raw_frame.closed_at, second_record_at);
 }
 
 #[test]
