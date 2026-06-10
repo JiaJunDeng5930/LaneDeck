@@ -45,6 +45,26 @@ fn count_trigger_closes_raw_frame_exactly_when_record_count_reaches_limit() {
 }
 
 #[test]
+fn constructor_rejects_non_positive_frame_limits() {
+    assert!(
+        LaneEngine::new(
+            script_lane_config(0, 60),
+            StoreProbe::new(empty_history()),
+            RunnerProbe::scripted(Vec::new()),
+        )
+        .is_err()
+    );
+    assert!(
+        LaneEngine::new(
+            script_lane_config(2, 0),
+            StoreProbe::new(empty_history()),
+            RunnerProbe::scripted(Vec::new()),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn time_trigger_closes_empty_raw_frame_and_runs_downstream_stages() {
     let opened_at = instant(1_700_001_000);
     let deadline = opened_at + contract_helpers::seconds(60);
@@ -278,7 +298,7 @@ fn failed_closure_keeps_raw_records_for_next_attempt() {
     let raw_frame = closed_frame(&effects, StageKind::Raw);
 
     assert_eq!(raw_frame.frame_no, 1);
-    assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
+    assert_record_ids(raw_frame, &["r1", "r2"]);
 }
 
 #[test]
@@ -328,7 +348,7 @@ fn failed_atomic_append_keeps_raw_records_without_partial_history() {
     let raw_frame = closed_frame(&effects, StageKind::Raw);
     let appended_batches = store_probe.appended_batches();
 
-    assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
+    assert_record_ids(raw_frame, &["r1", "r2"]);
     assert_eq!(appended_batches.len(), 1);
     assert_eq!(appended_batches[0].len(), 3);
 }

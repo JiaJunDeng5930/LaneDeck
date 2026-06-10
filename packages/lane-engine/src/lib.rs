@@ -79,6 +79,16 @@ where
             .ok_or_else(|| {
                 EngineError::InvalidConfig("rawStage.settings.frame.maxSeconds".into())
             })?;
+        if max_records == 0 {
+            return Err(EngineError::InvalidConfig(
+                "rawStage.settings.frame.maxRecords must be positive".into(),
+            ));
+        }
+        if max_seconds <= 0 {
+            return Err(EngineError::InvalidConfig(
+                "rawStage.settings.frame.maxSeconds must be positive".into(),
+            ));
+        }
 
         Ok(Self {
             config,
@@ -98,6 +108,10 @@ where
         record: FrameRecord,
         now: DateTime<Utc>,
     ) -> Result<Vec<EngineEffect>, EngineError> {
+        if self.raw_records.len() >= self.max_records {
+            self.close_raw_frame(TriggerKind::Count, now)?;
+        }
+
         if self.raw_opened_at.is_none() {
             self.raw_opened_at = Some(now);
         }
