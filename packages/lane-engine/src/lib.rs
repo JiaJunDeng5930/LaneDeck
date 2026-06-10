@@ -16,7 +16,7 @@ pub struct HistoryRequest {
 
 pub trait HistoryStore {
     fn load_history(&self, request: HistoryRequest) -> Result<StageHistory, EngineError>;
-    fn append_frame(&mut self, frame: Frame) -> Result<(), EngineError>;
+    fn append_frames(&mut self, frames: Vec<Frame>) -> Result<(), EngineError>;
 }
 
 pub trait StageRunner {
@@ -168,9 +168,18 @@ where
         let result = (|| {
             let metric_frame = self.run_metric_stage(raw_frame.clone(), closed_at)?;
             let event_frame = self.run_event_stage(metric_frame.clone(), closed_at)?;
-            self.persist_and_emit(raw_frame)?;
-            self.persist_and_emit(metric_frame)?;
-            self.persist_and_emit(event_frame)?;
+            self.store.append_frames(vec![
+                raw_frame.clone(),
+                metric_frame.clone(),
+                event_frame.clone(),
+            ])?;
+            self.effects
+                .push(EngineEffect::FrameClosed { frame: raw_frame });
+            self.effects.push(EngineEffect::FrameClosed {
+                frame: metric_frame,
+            });
+            self.effects
+                .push(EngineEffect::FrameClosed { frame: event_frame });
             Ok(())
         })();
 
@@ -243,12 +252,6 @@ where
             records,
             summary: serde_json::json!({}),
         })
-    }
-
-    fn persist_and_emit(&mut self, frame: Frame) -> Result<(), EngineError> {
-        self.store.append_frame(frame.clone())?;
-        self.effects.push(EngineEffect::FrameClosed { frame });
-        Ok(())
     }
 }
 

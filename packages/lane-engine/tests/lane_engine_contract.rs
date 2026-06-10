@@ -280,3 +280,55 @@ fn failed_closure_keeps_raw_records_for_next_attempt() {
     assert_eq!(raw_frame.frame_no, 1);
     assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
 }
+
+#[test]
+fn failed_atomic_append_keeps_raw_records_without_partial_history() {
+    let opened_at = instant(1_700_010_000);
+    let second_record_at = instant(1_700_010_003);
+    let retry_record_at = instant(1_700_010_006);
+    let store = StoreProbe::with_append_results(
+        empty_history(),
+        vec![Err("store write failed".to_string()), Ok(())],
+    );
+    let store_probe = store.clone();
+    let runner = RunnerProbe::scripted_results(vec![
+        Ok(stage_result(vec![raw_record(
+            "metric:first",
+            second_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:first",
+            second_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "metric:retry",
+            retry_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:retry",
+            retry_record_at,
+        )])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    assert!(
+        engine
+            .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+            .is_err()
+    );
+    assert!(engine.drain_effects().is_empty());
+    assert!(store_probe.appended_batches().is_empty());
+
+    let effects = engine
+        .ingest_raw_record(raw_record("r3", retry_record_at), retry_record_at)
+        .unwrap();
+    let raw_frame = closed_frame(&effects, StageKind::Raw);
+    let appended_batches = store_probe.appended_batches();
+
+    assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
+    assert_eq!(appended_batches.len(), 1);
+    assert_eq!(appended_batches[0].len(), 3);
+}
