@@ -161,23 +161,25 @@ where
             closed_at,
             trigger_kind,
             record_count: self.raw_records.len() as u32,
-            records: std::mem::take(&mut self.raw_records),
+            records: self.raw_records.clone(),
             summary: serde_json::json!({}),
         };
-        self.next_frame_no += 1;
-        self.raw_opened_at = None;
 
         let result = (|| {
-            self.persist_and_emit(raw_frame.clone())?;
-            let metric_frame = self.run_metric_stage(raw_frame, closed_at)?;
-            self.persist_and_emit(metric_frame.clone())?;
-            let event_frame = self.run_event_stage(metric_frame, closed_at)?;
+            let metric_frame = self.run_metric_stage(raw_frame.clone(), closed_at)?;
+            let event_frame = self.run_event_stage(metric_frame.clone(), closed_at)?;
+            self.persist_and_emit(raw_frame)?;
+            self.persist_and_emit(metric_frame)?;
             self.persist_and_emit(event_frame)?;
             Ok(())
         })();
 
         if result.is_err() {
             self.effects.truncate(effects_start);
+        } else {
+            self.raw_records.clear();
+            self.next_frame_no += 1;
+            self.raw_opened_at = None;
         }
 
         result

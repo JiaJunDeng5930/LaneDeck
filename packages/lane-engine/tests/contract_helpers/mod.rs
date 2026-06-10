@@ -142,12 +142,25 @@ pub struct StoreProbe {
 #[derive(Clone)]
 struct StoreProbeState {
     history: StageHistory,
+    record_appends: bool,
 }
 
 impl StoreProbe {
     pub fn new(history: StageHistory) -> Self {
         Self {
-            inner: Rc::new(RefCell::new(StoreProbeState { history })),
+            inner: Rc::new(RefCell::new(StoreProbeState {
+                history,
+                record_appends: false,
+            })),
+        }
+    }
+
+    pub fn recording(history: StageHistory) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(StoreProbeState {
+                history,
+                record_appends: true,
+            })),
         }
     }
 }
@@ -157,7 +170,15 @@ impl HistoryStore for StoreProbe {
         Ok(self.inner.borrow().history.clone())
     }
 
-    fn append_frame(&mut self, _frame: Frame) -> Result<(), EngineError> {
+    fn append_frame(&mut self, frame: Frame) -> Result<(), EngineError> {
+        let mut inner = self.inner.borrow_mut();
+        if inner.record_appends {
+            match frame.stage {
+                StageKind::Raw => inner.history.upstream_frames.push(frame),
+                StageKind::Metric => inner.history.metric_frames.push(frame),
+                StageKind::Event => inner.history.event_frames.push(frame),
+            }
+        }
         Ok(())
     }
 }

@@ -220,3 +220,63 @@ fn failed_downstream_stage_does_not_leak_partial_effects() {
     assert!(result.is_err());
     assert!(engine.drain_effects().is_empty());
 }
+
+#[test]
+fn current_frames_are_not_loaded_into_their_own_stage_history() {
+    let opened_at = instant(1_700_008_000);
+    let second_record_at = instant(1_700_008_003);
+    let store = StoreProbe::recording(empty_history());
+    let runner = RunnerProbe::scripted(vec![
+        stage_result(vec![raw_record("metric:r1+r2", second_record_at)]),
+        stage_result(vec![raw_record("event:r1+r2", second_record_at)]),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner.clone()).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    engine
+        .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+        .unwrap();
+
+    let invocations = runner.invocations();
+    assert!(invocations[0].history.upstream_frames.is_empty());
+    assert!(invocations[1].history.metric_frames.is_empty());
+}
+
+#[test]
+fn failed_closure_keeps_raw_records_for_next_attempt() {
+    let opened_at = instant(1_700_009_000);
+    let second_record_at = instant(1_700_009_003);
+    let retry_record_at = instant(1_700_009_006);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted_results(vec![
+        Err("metric exploded".to_string()),
+        Ok(stage_result(vec![raw_record(
+            "metric:retry",
+            retry_record_at,
+        )])),
+        Ok(stage_result(vec![raw_record(
+            "event:retry",
+            retry_record_at,
+        )])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    assert!(
+        engine
+            .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+            .is_err()
+    );
+
+    let effects = engine
+        .ingest_raw_record(raw_record("r3", retry_record_at), retry_record_at)
+        .unwrap();
+    let raw_frame = closed_frame(&effects, StageKind::Raw);
+
+    assert_eq!(raw_frame.frame_no, 1);
+    assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
+}
