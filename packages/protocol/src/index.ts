@@ -283,7 +283,10 @@ function parseFrameWithValidator(
       "metric",
       "event",
     ] as const),
-    frameNo: validator.integer(object.frameNo, joinPath(path, "frameNo")),
+    frameNo: validator.unsignedInteger(
+      object.frameNo,
+      joinPath(path, "frameNo"),
+    ),
     openedAt: validator.timestamp(object.openedAt, joinPath(path, "openedAt")),
     closedAt: validator.timestamp(object.closedAt, joinPath(path, "closedAt")),
     triggerKind: validator.oneOf(
@@ -291,7 +294,7 @@ function parseFrameWithValidator(
       joinPath(path, "triggerKind"),
       ["count", "time"] as const,
     ),
-    recordCount: validator.integer(
+    recordCount: validator.unsignedInteger(
       object.recordCount,
       joinPath(path, "recordCount"),
     ),
@@ -343,10 +346,16 @@ class Validator {
     if (
       input === null ||
       typeof input === "string" ||
-      typeof input === "number" ||
       typeof input === "boolean"
     ) {
       return input;
+    }
+    if (typeof input === "number") {
+      if (Number.isFinite(input)) {
+        return input;
+      }
+      this.add(path, "expected finite JSON number");
+      return null;
     }
     if (Array.isArray(input)) {
       return input.map((item, index) =>
@@ -376,17 +385,17 @@ class Validator {
     return 0;
   }
 
-  integer(input: unknown, path: string): number {
-    if (Number.isInteger(input)) {
+  unsignedInteger(input: unknown, path: string): number {
+    if (Number.isSafeInteger(input) && (input as number) >= 0) {
       return input as number;
     }
-    this.add(path, "expected integer");
+    this.add(path, "expected unsigned integer");
     return 0;
   }
 
   timestamp(input: unknown, path: string): string {
     const value = this.string(input, path);
-    if (value !== "" && Number.isNaN(Date.parse(value))) {
+    if (value !== "" && !isStrictRfc3339DateTime(value)) {
       this.add(path, "expected RFC 3339 timestamp");
     }
     return value;
@@ -421,4 +430,38 @@ class Validator {
       throw new ProtocolError(this.diagnostics);
     }
   }
+}
+
+function isStrictRfc3339DateTime(value: string): boolean {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/,
+  );
+  if (match === null) {
+    return false;
+  }
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] =
+    match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+
+  const localDate = new Date(
+    Date.UTC(year, month - 1, day, hour, minute, second),
+  );
+  return (
+    localDate.getUTCFullYear() === year &&
+    localDate.getUTCMonth() === month - 1 &&
+    localDate.getUTCDate() === day &&
+    localDate.getUTCHours() === hour &&
+    localDate.getUTCMinutes() === minute &&
+    localDate.getUTCSeconds() === second
+  );
 }

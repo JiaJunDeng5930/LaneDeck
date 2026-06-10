@@ -1,4 +1,7 @@
-use lanedeck_protocol::{ProtocolError, TriggerKind, parse_frame_json};
+use lanedeck_protocol::{
+    ProtocolError, StageMode, TriggerKind, parse_frame_json, parse_ingest_batch_json,
+    parse_lane_config,
+};
 use serde_json::json;
 
 fn valid_count_frame() -> serde_json::Value {
@@ -18,6 +21,16 @@ fn valid_count_frame() -> serde_json::Value {
             }
         ],
         "summary": {}
+    })
+}
+
+fn valid_lane_config() -> serde_json::Value {
+    json!({
+        "laneId": "lane.test-runtime",
+        "displayName": "Test Runtime",
+        "rawStage": { "mode": "builtin", "settings": {} },
+        "metricStage": { "mode": "passthrough", "settings": {} },
+        "eventStage": { "mode": "empty", "settings": {} }
     })
 }
 
@@ -43,6 +56,63 @@ fn accepts_time_triggered_empty_frame() {
     assert_eq!(frame.trigger_kind, TriggerKind::Time);
     assert_eq!(frame.record_count, 0);
     assert!(frame.records.is_empty());
+}
+
+#[test]
+fn parses_typed_lane_config() {
+    let bytes = serde_json::to_vec(&valid_lane_config()).unwrap();
+
+    let config = parse_lane_config(&bytes).expect("valid lane config");
+
+    assert_eq!(config.lane_id, "lane.test-runtime");
+    assert_eq!(config.metric_stage.mode, StageMode::Passthrough);
+}
+
+#[test]
+fn rejects_invalid_lane_config_with_field_diagnostic() {
+    let error = parse_lane_config(b"null").expect_err("lane config object required");
+
+    match error {
+        ProtocolError::Validation { diagnostics } => {
+            assert!(diagnostics.iter().any(|diagnostic| diagnostic.path == "$"));
+        }
+    }
+}
+
+#[test]
+fn parses_typed_ingest_batch() {
+    let batch = parse_ingest_batch_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.devbox",
+        "batchId": "batch-1",
+        "frames": [
+            valid_count_frame()
+        ]
+    }))
+    .expect("valid ingest batch");
+
+    assert_eq!(batch.workspace_id, "workspace.local");
+    assert_eq!(batch.frames.len(), 1);
+}
+
+#[test]
+fn rejects_invalid_ingest_batch_with_field_diagnostic() {
+    let error = parse_ingest_batch_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.devbox",
+        "batchId": "batch-1"
+    }))
+    .expect_err("frames required");
+
+    match error {
+        ProtocolError::Validation { diagnostics } => {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path == "frames")
+            );
+        }
+    }
 }
 
 #[test]

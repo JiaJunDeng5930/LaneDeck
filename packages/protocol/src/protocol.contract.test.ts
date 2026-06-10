@@ -4,6 +4,7 @@ import {
   ProtocolError,
   parseFrame,
   parseIngestBatch,
+  parseLaneConfig,
   parseShellContentMessage,
 } from "./index";
 
@@ -67,9 +68,78 @@ describe("protocol frame contract", () => {
       );
     }
   });
+
+  it("rejects negative frame counters", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        frameNo: -1,
+      }),
+    ).toThrow(ProtocolError);
+
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        recordCount: -1,
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("rejects timestamps outside strict RFC 3339 date-time shape", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        openedAt: "2026-06-10",
+      }),
+    ).toThrow(ProtocolError);
+
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        openedAt: "2026-02-31T00:00:00Z",
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("rejects non-finite JSON numbers", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        records: [
+          {
+            id: "record-1",
+            observedAt: "2026-06-10T10:00:01.000Z",
+            body: { durationSeconds: Number.POSITIVE_INFINITY },
+          },
+        ],
+      }),
+    ).toThrow(ProtocolError);
+
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        summary: { maxDurationSeconds: Number.NaN },
+      }),
+    ).toThrow(ProtocolError);
+  });
 });
 
 describe("protocol wire contract", () => {
+  it("accepts a minimal lane config", () => {
+    expect(
+      parseLaneConfig({
+        laneId: "lane.test-runtime",
+        displayName: "Test Runtime",
+        rawStage: { mode: "builtin", settings: {} },
+        metricStage: { mode: "passthrough", settings: {} },
+        eventStage: { mode: "empty", settings: {} },
+      }),
+    ).toMatchObject({
+      laneId: "lane.test-runtime",
+      metricStage: { mode: "passthrough" },
+    });
+  });
+
   it("accepts an ingest batch carrying count and time frames", () => {
     expect(
       parseIngestBatch({
@@ -91,6 +161,16 @@ describe("protocol wire contract", () => {
       batchId: "batch-1",
       frames: [{ triggerKind: "count" }, { triggerKind: "time" }],
     });
+  });
+
+  it("rejects invalid ingest batch shape", () => {
+    expect(() =>
+      parseIngestBatch({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        batchId: "batch-1",
+      }),
+    ).toThrow(ProtocolError);
   });
 
   it.each([
