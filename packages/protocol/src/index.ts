@@ -294,7 +294,7 @@ function parseFrameWithValidator(
       joinPath(path, "triggerKind"),
       ["count", "time"] as const,
     ),
-    recordCount: validator.unsignedInteger(
+    recordCount: validator.unsigned32(
       object.recordCount,
       joinPath(path, "recordCount"),
     ),
@@ -327,7 +327,7 @@ class Validator {
   readonly diagnostics: Diagnostic[] = [];
 
   object(input: unknown, path: string): Record<string, unknown> {
-    if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    if (isPlainJsonObject(input)) {
       return input as Record<string, unknown>;
     }
     this.add(path, "expected object");
@@ -393,6 +393,18 @@ class Validator {
     return 0;
   }
 
+  unsigned32(input: unknown, path: string): number {
+    if (
+      Number.isSafeInteger(input) &&
+      (input as number) >= 0 &&
+      (input as number) <= 0xffffffff
+    ) {
+      return input as number;
+    }
+    this.add(path, "expected unsigned 32-bit integer");
+    return 0;
+  }
+
   timestamp(input: unknown, path: string): string {
     const value = this.string(input, path);
     if (value !== "" && !isStrictRfc3339DateTime(value)) {
@@ -432,16 +444,34 @@ class Validator {
   }
 }
 
+function isPlainJsonObject(input: unknown): input is Record<string, unknown> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(input);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function isStrictRfc3339DateTime(value: string): boolean {
   const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/,
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/,
   );
   if (match === null) {
     return false;
   }
 
-  const [, yearText, monthText, dayText, hourText, minuteText, secondText] =
-    match;
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    ,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
   const year = Number(yearText);
   const month = Number(monthText);
   const day = Number(dayText);
@@ -451,6 +481,14 @@ function isStrictRfc3339DateTime(value: string): boolean {
 
   if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
     return false;
+  }
+
+  if (offsetHourText !== undefined && offsetMinuteText !== undefined) {
+    const offsetHour = Number(offsetHourText);
+    const offsetMinute = Number(offsetMinuteText);
+    if (offsetHour > 23 || offsetMinute > 59) {
+      return false;
+    }
   }
 
   const localDate = new Date(

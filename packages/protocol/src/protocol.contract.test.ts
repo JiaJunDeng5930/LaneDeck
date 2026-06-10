@@ -85,6 +85,15 @@ describe("protocol frame contract", () => {
     ).toThrow(ProtocolError);
   });
 
+  it("rejects recordCount beyond the Rust u32 range", () => {
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        recordCount: 4_294_967_296,
+      }),
+    ).toThrow(ProtocolError);
+  });
+
   it("rejects timestamps outside strict RFC 3339 date-time shape", () => {
     expect(() =>
       parseFrame({
@@ -97,6 +106,13 @@ describe("protocol frame contract", () => {
       parseFrame({
         ...validCountFrame,
         openedAt: "2026-02-31T00:00:00Z",
+      }),
+    ).toThrow(ProtocolError);
+
+    expect(() =>
+      parseFrame({
+        ...validCountFrame,
+        openedAt: "2026-06-10T10:00:00+99:99",
       }),
     ).toThrow(ProtocolError);
   });
@@ -179,5 +195,14 @@ describe("protocol wire contract", () => {
     { type: "error_report", payload: { message: "render failed" } },
   ])("accepts shell-content message $type", (message) => {
     expect(parseShellContentMessage(message)).toMatchObject(message);
+  });
+
+  it("rejects structured-clone objects outside JSON object shape", () => {
+    expect(() =>
+      parseShellContentMessage({
+        type: "ready",
+        payload: new Map([["pickId", "content.home"]]),
+      }),
+    ).toThrow(ProtocolError);
   });
 });
