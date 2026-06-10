@@ -102,6 +102,7 @@ fn metric_stage_receives_current_raw_frame_configured_history_lane_config_and_ti
         vec![frame("event", "count", Vec::new(), 5, now, now)],
     );
     let store = StoreProbe::new(expected_history.clone());
+    let store_probe = store.clone();
     let runner = RunnerProbe::scripted(vec![stage_result(vec![raw_record("metric:1", now)])]);
     let mut engine = LaneEngine::new(script_lane_config(10, 60), store, runner.clone()).unwrap();
 
@@ -114,6 +115,9 @@ fn metric_stage_receives_current_raw_frame_configured_history_lane_config_and_ti
     assert_same_history(&invocations[0].history, &expected_history);
     assert_eq!(invocations[0].lane.lane_id, "lane.cpu");
     assert_eq!(invocations[0].now, now);
+    assert_eq!(store_probe.requests()[0].upstream_frames, 2);
+    assert_eq!(store_probe.requests()[0].metric_frames, 2);
+    assert_eq!(store_probe.requests()[0].event_frames, 1);
 }
 
 #[test]
@@ -133,6 +137,7 @@ fn event_stage_receives_current_metric_frame_configured_history_lane_config_and_
         vec![frame("event", "count", Vec::new(), 6, now, now)],
     );
     let store = StoreProbe::new(expected_history.clone());
+    let store_probe = store.clone();
     let runner = RunnerProbe::scripted(vec![stage_result(vec![raw_record("event:1", now)])]);
     let mut engine = LaneEngine::new(script_lane_config(10, 60), store, runner.clone()).unwrap();
 
@@ -145,6 +150,9 @@ fn event_stage_receives_current_metric_frame_configured_history_lane_config_and_
     assert_same_history(&invocations[0].history, &expected_history);
     assert_eq!(invocations[0].lane.lane_id, "lane.cpu");
     assert_eq!(invocations[0].now, now);
+    assert_eq!(store_probe.requests()[0].upstream_frames, 1);
+    assert_eq!(store_probe.requests()[0].metric_frames, 2);
+    assert_eq!(store_probe.requests()[0].event_frames, 2);
 }
 
 #[test]

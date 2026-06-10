@@ -12,6 +12,9 @@ pub const PACKAGE_NAME: &str = "lanedeck-lane-engine";
 pub struct HistoryRequest {
     pub lane_id: String,
     pub stage: StageKind,
+    pub upstream_frames: usize,
+    pub metric_frames: usize,
+    pub event_frames: usize,
 }
 
 pub trait HistoryStore {
@@ -237,6 +240,9 @@ where
                 let history = self.store.load_history(HistoryRequest {
                     lane_id: self.config.lane_id.clone(),
                     stage: target_stage.clone(),
+                    upstream_frames: history_window(&self.config, &target_stage, "upstreamFrames"),
+                    metric_frames: history_window(&self.config, &target_stage, "metricFrames"),
+                    event_frames: history_window(&self.config, &target_stage, "eventFrames"),
                 })?;
                 let result = self.runner.run_stage(StageInvocation {
                     current_frame: upstream_frame.clone(),
@@ -276,4 +282,13 @@ fn stage_path(stage: &StageKind) -> String {
         StageKind::Event => "eventStage",
     }
     .to_string()
+}
+
+fn history_window(config: &LaneConfig, stage: &StageKind, key: &str) -> usize {
+    let stage_config = match stage {
+        StageKind::Raw => &config.raw_stage,
+        StageKind::Metric => &config.metric_stage,
+        StageKind::Event => &config.event_stage,
+    };
+    stage_config.settings["history"][key].as_u64().unwrap_or(0) as usize
 }

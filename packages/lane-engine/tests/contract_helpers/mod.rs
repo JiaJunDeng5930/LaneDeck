@@ -142,6 +142,7 @@ pub struct StoreProbe {
 #[derive(Clone)]
 struct StoreProbeState {
     history: StageHistory,
+    requests: Vec<HistoryRequest>,
     record_appends: bool,
     append_results: Vec<Result<(), String>>,
     append_attempts: usize,
@@ -153,6 +154,7 @@ impl StoreProbe {
         Self {
             inner: Rc::new(RefCell::new(StoreProbeState {
                 history,
+                requests: Vec::new(),
                 record_appends: false,
                 append_results: Vec::new(),
                 append_attempts: 0,
@@ -165,6 +167,7 @@ impl StoreProbe {
         Self {
             inner: Rc::new(RefCell::new(StoreProbeState {
                 history,
+                requests: Vec::new(),
                 record_appends: true,
                 append_results: Vec::new(),
                 append_attempts: 0,
@@ -180,6 +183,7 @@ impl StoreProbe {
         Self {
             inner: Rc::new(RefCell::new(StoreProbeState {
                 history,
+                requests: Vec::new(),
                 record_appends: true,
                 append_results,
                 append_attempts: 0,
@@ -191,11 +195,17 @@ impl StoreProbe {
     pub fn appended_batches(&self) -> Vec<Vec<Frame>> {
         self.inner.borrow().appended_batches.clone()
     }
+
+    pub fn requests(&self) -> Vec<HistoryRequest> {
+        self.inner.borrow().requests.clone()
+    }
 }
 
 impl HistoryStore for StoreProbe {
-    fn load_history(&self, _request: HistoryRequest) -> Result<StageHistory, EngineError> {
-        Ok(self.inner.borrow().history.clone())
+    fn load_history(&self, request: HistoryRequest) -> Result<StageHistory, EngineError> {
+        let mut inner = self.inner.borrow_mut();
+        inner.requests.push(request);
+        Ok(inner.history.clone())
     }
 
     fn append_frames(&mut self, frames: Vec<Frame>) -> Result<(), EngineError> {
