@@ -10,5 +10,10 @@ version = "0.0.0"
 crate-type = ["staticlib", "cdylib", "rlib"]
 name = "lanedeck_shell"
 
+[workspace]
+
 [dependencies]
 tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

@@ -1,0 +1,352 @@
+import type {
+  Diagnostic,
+  JsonObject,
+  MutationRequest,
+  MutationResult,
+  QueryRequest,
+  QueryResponse,
+} from "@lanedeck/protocol";
+
+export interface CurrentContentDescriptor {
+  workspaceId: string;
+  revision: string;
+  path: string;
+  uri?: string;
+}
+
+export interface ProtocolDiagnosticRecord {
+  source: "shell-content" | "live" | "content";
+  diagnostics: Diagnostic[];
+  receivedAt: string;
+}
+
+export interface CenterQueryClient {
+  getCurrentContent(): Promise<CurrentContentDescriptor>;
+  recordProtocolDiagnostic(record: ProtocolDiagnosticRecord): Promise<void>;
+}
+
+export interface CenterMutationClient {
+  mutate(request: MutationRequest): Promise<MutationResult>;
+  patchContent(
+    workspaceId: string,
+    payload: JsonObject,
+  ): Promise<Extract<MutationResult, { mutation: "patch_content" }>>;
+}
+
+export interface BrowserLiveEvent {
+  type: "content_changed";
+  workspaceId: string;
+  contentRevision: string;
+}
+
+export interface BrowserLiveHandlers {
+  onEvent(event: BrowserLiveEvent): void;
+  onDiagnostic?(diagnostics: Diagnostic[]): void;
+  onError?(error: unknown): void;
+}
+
+export interface BrowserLiveConnection {
+  close(): Promise<void> | void;
+}
+
+export interface BrowserLiveClient {
+  connect(handlers: BrowserLiveHandlers): Promise<BrowserLiveConnection>;
+}
+
+export interface HttpCenterClientOptions {
+  baseUrl: string;
+  workspaceId: string;
+  fetch?: typeof fetch;
+  reportProtocolDiagnostic?: (
+    record: ProtocolDiagnosticRecord,
+  ) => Promise<void> | void;
+}
+
+export interface HttpMutationClientOptions {
+  baseUrl: string;
+  fetch?: typeof fetch;
+}
+
+export interface WebSocketLiveClientOptions {
+  url: string;
+  WebSocketCtor?: typeof WebSocket;
+}
+
+export class CenterClientError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+export function createHttpCenterClient(
+  options: HttpCenterClientOptions,
+): CenterQueryClient & {
+  query(request: QueryRequest): Promise<QueryResponse>;
+} {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const baseUrl = normalizeBaseUrl(options.baseUrl);
+  const reportProtocolDiagnostic =
+    options.reportProtocolDiagnostic ?? (async () => undefined);
+
+  async function query(request: QueryRequest): Promise<QueryResponse> {
+    return postJson<QueryResponse>(fetcher, new URL("/api/query", baseUrl), {
+      workspaceId: request.workspaceId,
+      query: request.query,
+      params: request.params,
+    });
+  }
+
+  return {
+    query,
+    async getCurrentContent(): Promise<CurrentContentDescriptor> {
+      const response = await query({
+        workspaceId: options.workspaceId,
+        query: "current_content",
+        params: {},
+      });
+      const row = response.rows[0];
+      if (row === undefined) {
+        throw new CenterClientError("center returned no current content row");
+      }
+      return descriptorFromRow(options.workspaceId, row);
+    },
+    async recordProtocolDiagnostic(
+      record: ProtocolDiagnosticRecord,
+    ): Promise<void> {
+      await reportProtocolDiagnostic(record);
+    },
+  };
+}
+
+export function createHttpMutationClient(
+  options: HttpMutationClientOptions,
+): CenterMutationClient {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const baseUrl = normalizeBaseUrl(options.baseUrl);
+
+  return {
+    async mutate(request: MutationRequest): Promise<MutationResult> {
+      const result = await postJson<unknown>(
+        fetcher,
+        new URL("/api/ai/mutation", baseUrl),
+        request,
+      );
+      return assertMutationResult(result);
+    },
+    async patchContent(
+      workspaceId: string,
+      payload: JsonObject,
+    ): Promise<Extract<MutationResult, { mutation: "patch_content" }>> {
+      const result = await this.mutate({
+        workspaceId,
+        mutation: "patch_content",
+        payload,
+      });
+      if (result.mutation !== "patch_content") {
+        throw new CenterClientError(
+          "center returned a different mutation type",
+        );
+      }
+      return result;
+    },
+  };
+}
+
+export function createWebSocketLiveClient(
+  options: WebSocketLiveClientOptions,
+): BrowserLiveClient {
+  const WebSocketImpl = options.WebSocketCtor ?? globalThis.WebSocket;
+
+  return {
+    connect(handlers: BrowserLiveHandlers): Promise<BrowserLiveConnection> {
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocketImpl(options.url);
+        let settled = false;
+
+        socket.addEventListener(
+          "open",
+          () => {
+            settled = true;
+            resolve({
+              close() {
+                socket.close();
+              },
+            });
+          },
+          { once: true },
+        );
+        socket.addEventListener("message", (event) => {
+          void decodeLiveMessage(event.data)
+            .then((message) => handleLiveMessage(message, handlers))
+            .catch((error: unknown) => {
+              handlers.onDiagnostic?.([
+                {
+                  path: "$",
+                  message: errorMessage(error),
+                },
+              ]);
+            });
+        });
+        socket.addEventListener("error", (event) => {
+          if (settled) {
+            handlers.onError?.(event);
+            return;
+          }
+          settled = true;
+          reject(new CenterClientError("live connection failed"));
+        });
+      });
+    },
+  };
+}
+
+export function centerLiveUrl(baseUrl: string, workspaceId: string): string {
+  const url = new URL("/api/live/browser", normalizeBaseUrl(baseUrl));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("workspaceId", workspaceId);
+  return url.toString();
+}
+
+function descriptorFromRow(
+  workspaceId: string,
+  row: JsonObject,
+): CurrentContentDescriptor {
+  const revision = readString(row.contentRevision, "contentRevision");
+  const path = readOptionalString(row.path, "path") ?? "index.html";
+  const uri = readOptionalString(row.uri, "uri");
+  return { workspaceId, revision, path, ...(uri === undefined ? {} : { uri }) };
+}
+
+async function postJson<T>(
+  fetcher: typeof fetch,
+  url: URL,
+  body: unknown,
+): Promise<T> {
+  const response = await fetcher(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new CenterClientError(
+      `center request failed with status ${response.status}`,
+      response.status,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+function normalizeBaseUrl(baseUrl: string): URL {
+  return new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+}
+
+function readString(input: unknown, path: string): string {
+  if (typeof input === "string" && input.length > 0) {
+    return input;
+  }
+  throw new CenterClientError(`center row is missing ${path}`);
+}
+
+function readOptionalString(input: unknown, path: string): string | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (typeof input === "string" && input.length > 0) {
+    return input;
+  }
+  throw new CenterClientError(`center row has invalid ${path}`);
+}
+
+async function decodeLiveMessage(data: unknown): Promise<unknown> {
+  if (typeof data === "string") {
+    return JSON.parse(data) as unknown;
+  }
+  if (data instanceof ArrayBuffer) {
+    return JSON.parse(new TextDecoder().decode(data)) as unknown;
+  }
+  if (data instanceof Blob) {
+    return JSON.parse(await data.text()) as unknown;
+  }
+  return data;
+}
+
+function handleLiveMessage(
+  message: unknown,
+  handlers: BrowserLiveHandlers,
+): void {
+  if (!isJsonObject(message)) {
+    handlers.onDiagnostic?.([
+      { path: "$", message: "expected live event object" },
+    ]);
+    return;
+  }
+  if (message.type !== "content_changed") {
+    handlers.onDiagnostic?.([
+      { path: "type", message: "expected content_changed" },
+    ]);
+    return;
+  }
+  if (typeof message.workspaceId !== "string") {
+    handlers.onDiagnostic?.([
+      { path: "workspaceId", message: "expected string" },
+    ]);
+    return;
+  }
+  if (typeof message.contentRevision !== "string") {
+    handlers.onDiagnostic?.([
+      { path: "contentRevision", message: "expected string" },
+    ]);
+    return;
+  }
+
+  handlers.onEvent({
+    type: "content_changed",
+    workspaceId: message.workspaceId,
+    contentRevision: message.contentRevision,
+  });
+}
+
+function assertMutationResult(input: unknown): MutationResult {
+  if (!isJsonObject(input)) {
+    throw new CenterClientError("mutation response must be an object");
+  }
+  if (
+    input.mutation === "patch_content" &&
+    typeof input.mutationId === "string" &&
+    typeof input.contentRevision === "string" &&
+    Array.isArray(input.diagnostics)
+  ) {
+    return input as Extract<MutationResult, { mutation: "patch_content" }>;
+  }
+  if (
+    input.mutation === "patch_lane_config" &&
+    typeof input.mutationId === "string" &&
+    typeof input.laneRevision === "string" &&
+    Array.isArray(input.diagnostics)
+  ) {
+    return input as Extract<MutationResult, { mutation: "patch_lane_config" }>;
+  }
+  if (
+    input.mutation === "request_local_build" &&
+    typeof input.mutationId === "string" &&
+    typeof input.buildRequestId === "string" &&
+    Array.isArray(input.diagnostics)
+  ) {
+    return input as Extract<
+      MutationResult,
+      { mutation: "request_local_build" }
+    >;
+  }
+  throw new CenterClientError("mutation response shape is invalid");
+}
+
+function isJsonObject(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "live message decode failed";
+}
