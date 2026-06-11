@@ -23,6 +23,12 @@ pub fn script_lane_agent_config() -> AgentConfig {
     ))
 }
 
+pub fn script_lane_agent_config_with_interval(interval_seconds: u64) -> AgentConfig {
+    let mut config = script_lane_agent_config();
+    config.lanes[0].schedule.interval_seconds = interval_seconds;
+    config
+}
+
 pub fn scripted_metric_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.metric_stage.mode = from_json(json!("script"));
@@ -39,7 +45,9 @@ pub fn scripted_metric_agent_config() -> AgentConfig {
 pub fn two_record_frame_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.raw_stage.settings["frame"]["maxRecords"] = json!(2);
-    agent_config_with_lane(lane)
+    let mut config = agent_config_with_lane(lane);
+    config.lanes[0].schedule.interval_seconds = 1;
+    config
 }
 
 pub fn two_lane_agent_config() -> AgentConfig {
@@ -183,6 +191,10 @@ pub fn successful_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
 
 pub fn script_output_with_record(id: &str, now: DateTime<Utc>) -> ScriptRunOutput {
     ScriptRunOutput::from_json_records(vec![raw_record(id, now)])
+}
+
+pub fn script_output_with_records(ids: &[&str], now: DateTime<Utc>) -> ScriptRunOutput {
+    ScriptRunOutput::from_json_records(ids.iter().map(|id| raw_record(id, now)).collect())
 }
 
 pub fn diagnostic_script_output(now: DateTime<Utc>) -> ScriptRunOutput {

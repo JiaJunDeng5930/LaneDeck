@@ -8,9 +8,9 @@ use serde_json::json;
 use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, content_root, diagnostic_script_output, duration,
     empty_metric_agent_config, ingest_batch, instant, pending_spool_entry,
-    reloaded_script_lane_config, script_lane_agent_config, script_output_with_record,
-    scripted_metric_agent_config, successful_script_output, two_lane_agent_config,
-    two_record_frame_agent_config,
+    reloaded_script_lane_config, script_lane_agent_config, script_lane_agent_config_with_interval,
+    script_output_with_record, script_output_with_records, scripted_metric_agent_config,
+    successful_script_output, two_lane_agent_config, two_record_frame_agent_config,
 };
 
 #[tokio::test]
@@ -122,6 +122,44 @@ async fn reload_lane_config_control_message_refreshes_lane_config() {
     assert_eq!(request.lane_id, "lane.cpu");
     assert_eq!(request.cwd, "/var/lib/lanedeck/sources/cpu-reloaded");
     assert_eq!(request.timeout, duration(9));
+}
+
+#[tokio::test]
+async fn reload_lane_config_preserves_existing_schedule_cadence() {
+    let first = instant(1_700_013_500);
+    let early = instant(1_700_013_560);
+    let due = instant(1_700_013_620);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        successful_script_output(first),
+        successful_script_output(due),
+    ]);
+    let mut service = AgentService::new(
+        script_lane_agent_config_with_interval(120),
+        center,
+        spool,
+        runner.clone(),
+    )
+    .unwrap();
+
+    service.run_once(first).await.unwrap();
+    service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            reloaded_script_lane_config(),
+        ))
+        .await
+        .unwrap();
+    let early_report = service.run_once(early).await.unwrap();
+    let due_report = service.run_once(due).await.unwrap();
+
+    assert_eq!(early_report.lane_execution_count, 0);
+    assert_eq!(due_report.lane_execution_count, 1);
+    assert_eq!(runner.requests().len(), 2);
+    assert_eq!(
+        runner.requests()[1].cwd,
+        "/var/lib/lanedeck/sources/cpu-reloaded"
+    );
 }
 
 #[tokio::test]
@@ -293,7 +331,7 @@ async fn scripted_downstream_stage_runs_through_script_runner() {
 #[tokio::test]
 async fn lane_collection_state_survives_between_runs() {
     let first = instant(1_700_016_500);
-    let second = instant(1_700_016_560);
+    let second = instant(1_700_016_501);
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::default();
     let runner = ScriptRunnerProbe::with_outputs(vec![
@@ -324,6 +362,75 @@ async fn lane_collection_state_survives_between_runs() {
     assert_eq!(raw_frame.record_count, 2);
     assert_eq!(raw_frame.records[0].id, "raw:first");
     assert_eq!(raw_frame.records[1].id, "raw:second");
+}
+
+#[tokio::test]
+async fn expired_time_window_closes_before_new_records_are_ingested() {
+    let first = instant(1_700_016_580);
+    let second = instant(1_700_016_640);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        script_output_with_record("raw:first", first),
+        script_output_with_record("raw:second", second),
+    ]);
+    let mut service = AgentService::new(
+        two_record_frame_agent_config(),
+        center,
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    service.run_once(first).await.unwrap();
+    let report = service.run_once(second).await.unwrap();
+    let enqueued = spool.enqueued_batches();
+
+    assert_eq!(report.enqueued_batch_count, 1);
+    let raw_frame = enqueued[0]
+        .frames
+        .iter()
+        .find(|frame| frame.stage == lanedeck_protocol::StageKind::Raw)
+        .unwrap();
+    assert_eq!(raw_frame.record_count, 1);
+    assert_eq!(raw_frame.records[0].id, "raw:first");
+    assert_eq!(raw_frame.trigger_kind, lanedeck_protocol::TriggerKind::Time);
+}
+
+#[tokio::test]
+async fn closed_frames_are_enqueued_when_later_record_fails() {
+    let now = instant(1_700_016_590);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_results(vec![
+        Ok(script_output_with_records(
+            &["raw:first", "raw:second"],
+            now,
+        )),
+        Ok(successful_script_output(now)),
+        Err("metric failed on second record".to_string()),
+    ]);
+    let mut service = AgentService::new(
+        scripted_metric_agent_config(),
+        center,
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    let report = service.run_once(now).await.unwrap();
+    let enqueued = spool.enqueued_batches();
+
+    assert_eq!(report.enqueued_batch_count, 1);
+    assert_eq!(report.diagnostics.len(), 1);
+    assert!(report.diagnostics[0].message.contains("metric failed"));
+    assert_eq!(enqueued.len(), 1);
+    let raw_frame = enqueued[0]
+        .frames
+        .iter()
+        .find(|frame| frame.stage == lanedeck_protocol::StageKind::Raw)
+        .unwrap();
+    assert_eq!(raw_frame.records[0].id, "raw:first");
 }
 
 #[tokio::test]

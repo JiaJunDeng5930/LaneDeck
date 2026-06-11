@@ -113,21 +113,17 @@ where
             };
             report.diagnostics.extend(output.diagnostics.clone());
 
-            let effects = {
+            let pipeline_report = {
                 let lane = &mut self.lanes[lane_index];
-                match run_lane_pipeline(lane, output, now) {
-                    Ok(effects) => effects,
-                    Err(error) => {
-                        report
-                            .diagnostics
-                            .push(lane_error_diagnostic(&lane.lane, error));
-                        lane.mark_run(now);
-                        continue;
-                    }
-                }
+                run_lane_pipeline(lane, output, now)
             };
             self.lanes[lane_index].mark_run(now);
-            let (frames, diagnostics) = split_effects(effects);
+            if let Some(error) = pipeline_report.error {
+                report
+                    .diagnostics
+                    .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+            }
+            let (frames, diagnostics) = split_effects(pipeline_report.effects);
             report.diagnostics.extend(diagnostics);
             report.produced_frame_count += frames.len();
 
@@ -235,15 +231,18 @@ where
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
         validate_script_raw_stage(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
-        let runtime = LaneRuntime::new(lane_config, Duration::seconds(60), self.runner.clone())?;
-
         if let Some(existing) = self
             .lanes
             .iter_mut()
             .find(|existing| existing.lane.lane_id == lane_id)
         {
+            let mut runtime =
+                LaneRuntime::new(lane_config, existing.schedule_interval, self.runner.clone())?;
+            runtime.next_run_at = existing.next_run_at;
             *existing = runtime;
         } else {
+            let runtime =
+                LaneRuntime::new(lane_config, Duration::seconds(60), self.runner.clone())?;
             self.lanes.push(runtime);
         }
 
@@ -407,26 +406,61 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
     })
 }
 
+struct LanePipelineReport {
+    effects: Vec<EngineEffect>,
+    error: Option<AgentError>,
+}
+
 fn run_lane_pipeline<R>(
     lane: &mut LaneRuntime<R>,
     output: ScriptRunOutput,
     now: DateTime<Utc>,
-) -> Result<Vec<EngineEffect>, AgentError>
+) -> LanePipelineReport
 where
     R: ScriptRunner,
 {
     let mut effects = Vec::new();
 
-    for record in output.records {
-        effects.extend(
-            lane.engine
-                .ingest_raw_record(record, now)
-                .map_err(map_engine_error)?,
-        );
+    match lane.engine.tick(now).map_err(map_engine_error) {
+        Ok(opening_effects) => effects.extend(opening_effects),
+        Err(error) => {
+            return LanePipelineReport {
+                effects,
+                error: Some(error),
+            };
+        }
     }
 
-    effects.extend(lane.engine.tick(now).map_err(map_engine_error)?);
-    Ok(effects)
+    for record in output.records {
+        match lane
+            .engine
+            .ingest_raw_record(record, now)
+            .map_err(map_engine_error)
+        {
+            Ok(record_effects) => effects.extend(record_effects),
+            Err(error) => {
+                return LanePipelineReport {
+                    effects,
+                    error: Some(error),
+                };
+            }
+        }
+    }
+
+    match lane.engine.tick(now).map_err(map_engine_error) {
+        Ok(closing_effects) => effects.extend(closing_effects),
+        Err(error) => {
+            return LanePipelineReport {
+                effects,
+                error: Some(error),
+            };
+        }
+    }
+
+    LanePipelineReport {
+        effects,
+        error: None,
+    }
 }
 
 fn split_effects(effects: Vec<EngineEffect>) -> (Vec<Frame>, Vec<Diagnostic>) {
