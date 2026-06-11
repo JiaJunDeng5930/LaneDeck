@@ -13,6 +13,7 @@ export type {
 export {
   CenterClientError,
   centerLiveUrl,
+  createBrowserDiagnosticReporter,
   createHttpCenterClient,
   createHttpMutationClient,
   createWebSocketLiveClient,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   centerLiveUrl,
+  createBrowserDiagnosticReporter,
   createHttpCenterClient,
   createIframeContentLoader,
   createIframeHost,
@@ -18,6 +19,7 @@ const workspaceId =
 
 export function ShellView() {
   const appRef = useRef<ShellApp | undefined>(undefined);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [iframe, setIframe] = useState<HTMLIFrameElement | null>(null);
   const [status, setStatus] = useState("Starting");
   const [pickerEnabled, setPickerEnabled] = useState(false);
@@ -30,6 +32,7 @@ export function ShellView() {
     const center = createHttpCenterClient({
       baseUrl: centerBaseUrl,
       workspaceId,
+      reportProtocolDiagnostic: createBrowserDiagnosticReporter(),
     });
     const live = createWebSocketLiveClient({
       url: centerLiveUrl(centerBaseUrl, workspaceId),
@@ -40,22 +43,25 @@ export function ShellView() {
       live,
       contentLoader,
       clipboard: createNavigatorClipboardWriter(),
+      onContentSession(session) {
+        if (mounted) {
+          setStatus(session.status === "ready" ? "Ready" : "Content error");
+        }
+      },
+      onPickerModeChange(enabled) {
+        if (mounted) {
+          setPickerEnabled(enabled);
+        }
+      },
     });
     let mounted = true;
     appRef.current = app;
 
-    void app
-      .start()
-      .then(() => {
-        if (mounted) {
-          setStatus("Ready");
-        }
-      })
-      .catch((error: unknown) => {
-        if (mounted) {
-          setStatus(error instanceof Error ? error.message : "Shell error");
-        }
-      });
+    void app.start().catch((error: unknown) => {
+      if (mounted) {
+        setStatus(error instanceof Error ? error.message : "Shell error");
+      }
+    });
 
     return () => {
       mounted = false;
@@ -67,6 +73,9 @@ export function ShellView() {
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<unknown>) => {
+      if (!isHostedContentMessage(event, iframeRef.current)) {
+        return;
+      }
       void appRef.current?.handleContentMessage(event.data);
     };
     window.addEventListener("message", handleMessage);
@@ -107,10 +116,32 @@ export function ShellView() {
         </div>
       </header>
       <iframe
-        ref={setIframe}
+        ref={(element) => {
+          iframeRef.current = element;
+          setIframe(element);
+        }}
         className="shell-content"
         title="LaneDeck content"
       />
     </main>
+  );
+}
+
+function isHostedContentMessage(
+  event: MessageEvent<unknown>,
+  iframe: HTMLIFrameElement | null,
+): boolean {
+  return (
+    iframe?.contentWindow === event.source &&
+    isAllowedContentOrigin(event.origin)
+  );
+}
+
+function isAllowedContentOrigin(origin: string): boolean {
+  return (
+    origin === "lanedeck://localhost" ||
+    origin === "http://lanedeck.localhost" ||
+    origin === "https://lanedeck.localhost" ||
+    origin === "null"
   );
 }

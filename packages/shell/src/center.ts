@@ -72,6 +72,12 @@ export interface WebSocketLiveClientOptions {
   WebSocketCtor?: typeof WebSocket;
 }
 
+export interface BrowserDiagnosticReporterOptions {
+  storage?: Storage;
+  key?: string;
+  limit?: number;
+}
+
 export class CenterClientError extends Error {
   constructor(
     message: string,
@@ -200,6 +206,20 @@ export function createWebSocketLiveClient(
         });
       });
     },
+  };
+}
+
+export function createBrowserDiagnosticReporter(
+  options: BrowserDiagnosticReporterOptions = {},
+): (record: ProtocolDiagnosticRecord) => Promise<void> {
+  const storage = options.storage ?? globalThis.localStorage;
+  const key = options.key ?? "lanedeck.shell.diagnostics";
+  const limit = options.limit ?? 100;
+
+  return async (record: ProtocolDiagnosticRecord): Promise<void> => {
+    const current = readStoredDiagnostics(storage, key);
+    current.push(record);
+    storage.setItem(key, JSON.stringify(current.slice(-limit)));
   };
 }
 
@@ -341,6 +361,22 @@ function assertMutationResult(input: unknown): MutationResult {
     >;
   }
   throw new CenterClientError("mutation response shape is invalid");
+}
+
+function readStoredDiagnostics(
+  storage: Storage,
+  key: string,
+): ProtocolDiagnosticRecord[] {
+  const stored = storage.getItem(key);
+  if (stored === null) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    return Array.isArray(parsed) ? (parsed as ProtocolDiagnosticRecord[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function isJsonObject(input: unknown): input is Record<string, unknown> {

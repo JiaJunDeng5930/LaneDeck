@@ -88,6 +88,23 @@ describe("shell app contract", () => {
     expect(center.diagnostics[0]?.source).toBe("live");
   });
 
+  it("loads initial content when the live connection remains pending", async () => {
+    const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
+    const content = new FakeContentLoader();
+    const app = createShellApp({
+      center,
+      live: new FakeLive({ pendingConnect: true }),
+      contentLoader: content,
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+      liveConnectTimeoutMs: 0,
+    });
+
+    await app.start();
+
+    expect(content.loads).toEqual([descriptor("workspace.local", "rev-1")]);
+  });
+
   it("forwards picker mode and copies pick_result ids", async () => {
     const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
     const content = new FakeContentLoader();
@@ -109,6 +126,25 @@ describe("shell app contract", () => {
 
     expect(content.pickerModes).toEqual([true, false]);
     expect(clipboard.writes).toEqual(["content.home.title"]);
+  });
+
+  it("ignores pick_result messages while picker mode is disabled", async () => {
+    const clipboard = new FakeClipboard();
+    const app = createShellApp({
+      center: new FakeCenter([descriptor("workspace.local", "rev-1")]),
+      live: new FakeLive(),
+      contentLoader: new FakeContentLoader(),
+      clipboard,
+      now: fixedNow,
+    });
+
+    await app.start();
+    await app.handleContentMessage({
+      type: "pick_result",
+      payload: { pickId: "content.home.title" },
+    });
+
+    expect(clipboard.writes).toEqual([]);
   });
 
   it("records protocol diagnostics for invalid content messages", async () => {
@@ -181,11 +217,19 @@ class FakeLive implements BrowserLiveClient {
   closed = false;
   private handlers: BrowserLiveHandlers | undefined;
 
-  constructor(private readonly options: { failConnect?: boolean } = {}) {}
+  constructor(
+    private readonly options: {
+      failConnect?: boolean;
+      pendingConnect?: boolean;
+    } = {},
+  ) {}
 
   async connect(handlers: BrowserLiveHandlers): Promise<BrowserLiveConnection> {
     this.connectCount += 1;
     this.handlers = handlers;
+    if (this.options.pendingConnect === true) {
+      return new Promise<BrowserLiveConnection>(() => undefined);
+    }
     if (this.options.failConnect === true) {
       throw new Error("wss unavailable");
     }

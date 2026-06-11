@@ -28,6 +28,9 @@ export interface ShellDeps {
   contentLoader: ContentLoader;
   clipboard: ClipboardWriter;
   now?: () => string;
+  liveConnectTimeoutMs?: number;
+  onContentSession?: (session: ContentSession) => void;
+  onPickerModeChange?: (enabled: boolean) => void;
 }
 
 export interface ShellApp {
@@ -55,6 +58,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
   let liveConnection: BrowserLiveConnection | undefined;
   let activeSession: LoadedContentSession | undefined;
   let loadTail: Promise<void> = Promise.resolve();
+  const liveConnectTimeoutMs = deps.liveConnectTimeoutMs ?? 2_000;
 
   function enqueueContentLoad(): Promise<ContentSession> {
     const load = loadTail.then(performContentLoad, performContentLoad);
@@ -80,17 +84,20 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         if (picker.isEnabled()) {
           deps.contentLoader.setPickerMode(true);
         }
+        deps.onContentSession?.(session);
         return session;
       }
       activeSession = undefined;
       state = "ContentError";
-      await recordDiagnostics("content", session.diagnostics);
+      await safelyRecordDiagnostics("content", session.diagnostics);
+      deps.onContentSession?.(session);
       return session;
     } catch (error) {
       activeSession = undefined;
       state = "ContentError";
       const failure = contentLoadFailure(error);
-      await recordDiagnostics("content", failure.diagnostics);
+      await safelyRecordDiagnostics("content", failure.diagnostics);
+      deps.onContentSession?.(failure);
       return failure;
     }
   }
@@ -132,26 +139,8 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         return;
       }
       state = "ConnectingLive";
-      try {
-        liveConnection = await deps.live.connect({
-          onEvent(event: BrowserLiveEvent) {
-            void handleLiveEvent(event);
-          },
-          onDiagnostic(diagnostics: Diagnostic[]) {
-            void safelyRecordDiagnostics("live", diagnostics);
-          },
-          onError(error: unknown) {
-            void safelyRecordDiagnostics("live", [
-              { path: "$", message: errorMessage(error) },
-            ]);
-          },
-        });
-      } catch (error) {
-        await safelyRecordDiagnostics("live", [
-          { path: "$", message: errorMessage(error) },
-        ]);
-      }
-      await enqueueContentLoad();
+      const liveAttempt = connectLive();
+      await Promise.all([enqueueContentLoad(), waitForLiveStart(liveAttempt)]);
     },
 
     loadCurrentContent(): Promise<ContentSession> {
@@ -164,6 +153,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       }
       picker.setEnabled(enabled);
       deps.contentLoader.setPickerMode(enabled);
+      deps.onPickerModeChange?.(enabled);
       if (enabled && state === "ContentReady") {
         state = "PickerArmed";
       }
@@ -190,6 +180,9 @@ export function createShellApp(deps: ShellDeps): ShellApp {
             state = activeSession === undefined ? state : "ContentReady";
             return;
           case "pick_result": {
+            if (!picker.isEnabled()) {
+              return;
+            }
             state = "PickCopied";
             const result = await picker.copyPickId(parsed.payload.pickId);
             finishPickerCopy(result);
@@ -219,9 +212,46 @@ export function createShellApp(deps: ShellDeps): ShellApp {
     },
   };
 
+  async function connectLive(): Promise<void> {
+    try {
+      const connection = await deps.live.connect({
+        onEvent(event: BrowserLiveEvent) {
+          void handleLiveEvent(event);
+        },
+        onDiagnostic(diagnostics: Diagnostic[]) {
+          void safelyRecordDiagnostics("live", diagnostics);
+        },
+        onError(error: unknown) {
+          void safelyRecordDiagnostics("live", [
+            { path: "$", message: errorMessage(error) },
+          ]);
+        },
+      });
+      if (state === "Stopped") {
+        await connection.close();
+        return;
+      }
+      liveConnection = connection;
+    } catch (error) {
+      await safelyRecordDiagnostics("live", [
+        { path: "$", message: errorMessage(error) },
+      ]);
+    }
+  }
+
+  async function waitForLiveStart(liveAttempt: Promise<void>): Promise<void> {
+    await Promise.race([
+      liveAttempt,
+      new Promise<void>((resolve) =>
+        globalThis.setTimeout(resolve, liveConnectTimeoutMs),
+      ),
+    ]);
+  }
+
   function finishPickerCopy(_result: PickCopyResult): void {
     picker.setEnabled(false);
     deps.contentLoader.setPickerMode(false);
+    deps.onPickerModeChange?.(false);
     state = "ContentReady";
   }
 }
