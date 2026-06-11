@@ -23,6 +23,25 @@ pub fn script_lane_agent_config() -> AgentConfig {
     ))
 }
 
+pub fn scripted_metric_agent_config() -> AgentConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    lane.metric_stage.mode = from_json(json!("script"));
+    lane.metric_stage.settings = json!({
+        "command": "metric-cpu",
+        "cwd": "/var/lib/lanedeck/stages/metric",
+        "timeoutSeconds": 7,
+        "captureStdout": true,
+        "captureStderr": true
+    });
+    agent_config_with_lane(lane)
+}
+
+pub fn empty_metric_agent_config() -> AgentConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    lane.metric_stage.mode = from_json(json!("empty"));
+    agent_config_with_lane(lane)
+}
+
 pub fn reloaded_script_lane_config() -> LaneConfig {
     script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu-reloaded", 9)
 }
@@ -122,6 +141,18 @@ pub fn successful_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
     ScriptRunOutput::from_json_records(vec![raw_record("raw:1", now)])
 }
 
+pub fn diagnostic_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
+    from_json(json!({
+        "records": [raw_record("raw:1", now)],
+        "diagnostics": [
+            {
+                "path": "rawStage.script",
+                "message": "source script warning"
+            }
+        ]
+    }))
+}
+
 #[derive(Clone)]
 pub struct CenterProbe {
     inner: Arc<Mutex<CenterProbeState>>,
@@ -136,6 +167,7 @@ struct CenterProbeState {
 #[derive(Clone)]
 enum CenterPostOutcome {
     Ack,
+    RejectValidation,
     NetworkFailure,
 }
 
@@ -146,6 +178,10 @@ impl CenterProbe {
 
     pub fn failing_network() -> Self {
         Self::with_outcome(CenterPostOutcome::NetworkFailure)
+    }
+
+    pub fn rejecting_validation() -> Self {
+        Self::with_outcome(CenterPostOutcome::RejectValidation)
     }
 
     fn with_outcome(outcome: CenterPostOutcome) -> Self {
@@ -173,6 +209,16 @@ impl CenterClient for CenterProbe {
                 "batchId": batch.batch_id,
                 "acceptedFrameCount": batch.frames.len(),
                 "diagnostics": []
+            }))),
+            CenterPostOutcome::RejectValidation => Ok(from_json(json!({
+                "batchId": batch.batch_id,
+                "acceptedFrameCount": 0,
+                "diagnostics": [
+                    {
+                        "path": "frames[0]",
+                        "message": "rejected frame"
+                    }
+                ]
             }))),
             CenterPostOutcome::NetworkFailure => Err(AgentError::network("center unreachable")),
         }

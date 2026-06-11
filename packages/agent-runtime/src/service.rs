@@ -1,12 +1,13 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use lanedeck_lane_engine::{
     EngineEffect, EngineError, HistoryRequest, HistoryStore, LaneEngine, StageRunner,
 };
 use lanedeck_protocol::{
-    Frame, IngestBatch, LaneConfig, StageHistory, StageInvocation, StageKind, StageMode,
-    StageResult,
+    Diagnostic, Frame, IngestAck, IngestBatch, LaneConfig, StageHistory, StageInvocation,
+    StageKind, StageMode, StageResult,
 };
 use serde_json::Value;
 
@@ -31,18 +32,20 @@ pub struct AgentService<C, P, R> {
 
 struct LaneRuntime {
     lane: LaneConfig,
-    engine: LaneEngine<ServiceHistoryStore, PassthroughStageRunner>,
+    history: ServiceHistoryStore,
 }
 
 #[derive(Clone, Default)]
 struct ServiceHistoryStore {
+    inner: Arc<Mutex<ServiceHistoryState>>,
+}
+
+#[derive(Default)]
+struct ServiceHistoryState {
     upstream_frames: Vec<Frame>,
     metric_frames: Vec<Frame>,
     event_frames: Vec<Frame>,
 }
-
-#[derive(Clone, Default)]
-struct PassthroughStageRunner;
 
 impl<C, P, R> AgentService<C, P, R>
 where
@@ -72,22 +75,20 @@ where
     }
 
     pub async fn run_once(&mut self, now: DateTime<Utc>) -> Result<AgentRunReport, AgentError> {
-        let mut report = AgentRunReport {
-            lane_execution_count: 0,
-            produced_frame_count: 0,
-            enqueued_batch_count: 0,
-        };
+        let mut report = AgentRunReport::default();
 
         for lane_index in 0..self.lanes.len() {
             let request = collect_source_request(&self.lanes[lane_index].lane)?;
             let output = self.runner.run_script(request)?;
+            report.diagnostics.extend(output.diagnostics.clone());
             report.lane_execution_count += 1;
 
             let effects = {
                 let lane = &mut self.lanes[lane_index];
-                run_lane_pipeline(lane, output, now)?
+                run_lane_pipeline(lane, &self.runner, output, now)?
             };
-            let frames = frames_from_effects(effects);
+            let (frames, diagnostics) = split_effects(effects);
+            report.diagnostics.extend(diagnostics);
             report.produced_frame_count += frames.len();
 
             if frames.is_empty() {
@@ -112,11 +113,19 @@ where
 
         for entry in entries {
             let id = entry.id.clone();
-            match self.center.post_ingest_batch(entry.batch).await {
-                Ok(_) => {
+            match self.center.post_ingest_batch(entry.batch.clone()).await {
+                Ok(ack) if ack_is_complete(&ack, &entry.batch) => {
                     self.spool.mark_acked(std::slice::from_ref(&id))?;
                     report.uploaded_batch_count += 1;
                     report.acked_entry_count += 1;
+                }
+                Ok(ack) => {
+                    self.spool.mark_retry(
+                        std::slice::from_ref(&id),
+                        RetryReason::network(ack_retry_message(&ack, &entry.batch)),
+                    )?;
+                    report.uploaded_batch_count += 1;
+                    report.retry_entry_count += 1;
                 }
                 Err(error) => {
                     let reason = RetryReason::network(error.to_string());
@@ -181,7 +190,7 @@ where
                 Ok(ControlReply::accepted("apply_local_change"))
             }
             ControlMessage::Heartbeat => Ok(ControlReply::accepted("heartbeat")),
-            ControlMessage::Unknown { message_type } => Ok(ControlReply::accepted(message_type)),
+            ControlMessage::Unknown { message_type } => Ok(ControlReply::unknown(message_type)),
         }
     }
 
@@ -216,44 +225,77 @@ where
     }
 }
 
+fn ack_is_complete(ack: &IngestAck, batch: &IngestBatch) -> bool {
+    ack.batch_id == batch.batch_id
+        && ack.accepted_frame_count as usize == batch.frames.len()
+        && ack.diagnostics.is_empty()
+}
+
+fn ack_retry_message(ack: &IngestAck, batch: &IngestBatch) -> String {
+    format!(
+        "center accepted {}/{} frames for batch {} with {} diagnostics",
+        ack.accepted_frame_count,
+        batch.frames.len(),
+        batch.batch_id,
+        ack.diagnostics.len()
+    )
+}
+
 impl LaneRuntime {
     fn new(lane: LaneConfig) -> Result<Self, AgentError> {
-        let engine = LaneEngine::new(
-            lane.clone(),
-            ServiceHistoryStore::default(),
-            PassthroughStageRunner,
-        )
-        .map_err(map_engine_error)?;
-
-        Ok(Self { lane, engine })
+        Ok(Self {
+            lane,
+            history: ServiceHistoryStore::default(),
+        })
     }
 }
 
 impl HistoryStore for ServiceHistoryStore {
     fn load_history(&self, request: HistoryRequest) -> Result<StageHistory, EngineError> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|error| EngineError::Store(error.to_string()))?;
         Ok(StageHistory {
-            upstream_frames: tail(&self.upstream_frames, request.upstream_frames),
-            metric_frames: tail(&self.metric_frames, request.metric_frames),
-            event_frames: tail(&self.event_frames, request.event_frames),
+            upstream_frames: tail(&inner.upstream_frames, request.upstream_frames),
+            metric_frames: tail(&inner.metric_frames, request.metric_frames),
+            event_frames: tail(&inner.event_frames, request.event_frames),
         })
     }
 
     fn append_frame(&mut self, frame: Frame) -> Result<(), EngineError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|error| EngineError::Store(error.to_string()))?;
         match frame.stage {
-            StageKind::Raw => self.upstream_frames.push(frame),
-            StageKind::Metric => self.metric_frames.push(frame),
-            StageKind::Event => self.event_frames.push(frame),
+            StageKind::Raw => inner.upstream_frames.push(frame),
+            StageKind::Metric => inner.metric_frames.push(frame),
+            StageKind::Event => inner.event_frames.push(frame),
         }
 
         Ok(())
     }
 }
 
-impl StageRunner for PassthroughStageRunner {
-    fn run_stage(&self, _invocation: StageInvocation) -> Result<StageResult, EngineError> {
-        Err(EngineError::Runner(
-            "agent service draft only supports passthrough downstream stages".into(),
-        ))
+struct ServiceStageRunner<'a, R> {
+    runner: &'a R,
+}
+
+impl<R> StageRunner for ServiceStageRunner<'_, R>
+where
+    R: ScriptRunner,
+{
+    fn run_stage(&self, invocation: StageInvocation) -> Result<StageResult, EngineError> {
+        let request = transform_stage_request(&invocation)?;
+        let output = self
+            .runner
+            .run_script(request)
+            .map_err(|error| EngineError::Runner(error.to_string()))?;
+        Ok(StageResult {
+            records: output.records,
+            diagnostics: output.diagnostics,
+        })
     }
 }
 
@@ -288,33 +330,78 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
     })
 }
 
-fn run_lane_pipeline(
+fn run_lane_pipeline<R>(
     lane: &mut LaneRuntime,
+    script_runner: &R,
     output: ScriptRunOutput,
     now: DateTime<Utc>,
-) -> Result<Vec<EngineEffect>, AgentError> {
+) -> Result<Vec<EngineEffect>, AgentError>
+where
+    R: ScriptRunner,
+{
     let mut effects = Vec::new();
+    let stage_runner = ServiceStageRunner {
+        runner: script_runner,
+    };
+    let mut engine = LaneEngine::new(lane.lane.clone(), lane.history.clone(), stage_runner)
+        .map_err(map_engine_error)?;
 
     for record in output.records {
         effects.extend(
-            lane.engine
+            engine
                 .ingest_raw_record(record, now)
                 .map_err(map_engine_error)?,
         );
     }
 
-    effects.extend(lane.engine.tick(now).map_err(map_engine_error)?);
+    effects.extend(engine.tick(now).map_err(map_engine_error)?);
     Ok(effects)
 }
 
-fn frames_from_effects(effects: Vec<EngineEffect>) -> Vec<Frame> {
-    effects
-        .into_iter()
-        .filter_map(|effect| match effect {
-            EngineEffect::FrameClosed { frame } => Some(frame),
-            EngineEffect::StageDiagnostic { .. } => None,
-        })
-        .collect()
+fn split_effects(effects: Vec<EngineEffect>) -> (Vec<Frame>, Vec<Diagnostic>) {
+    let mut frames = Vec::new();
+    let mut diagnostics = Vec::new();
+
+    for effect in effects {
+        match effect {
+            EngineEffect::FrameClosed { frame } => frames.push(frame),
+            EngineEffect::StageDiagnostic { diagnostic, .. } => diagnostics.push(diagnostic),
+        }
+    }
+
+    (frames, diagnostics)
+}
+
+fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequest, EngineError> {
+    let settings = match invocation.current_frame.stage {
+        StageKind::Raw => &invocation.lane.metric_stage.settings,
+        StageKind::Metric => &invocation.lane.event_stage.settings,
+        StageKind::Event => {
+            return Err(EngineError::Runner(
+                "event frames do not have downstream script stages".to_string(),
+            ));
+        }
+    };
+    let lane_id = &invocation.lane.lane_id;
+
+    Ok(ScriptRunRequest {
+        purpose: ScriptPurpose::TransformStage,
+        lane_id: lane_id.clone(),
+        command: string_setting(settings, "command", lane_id)
+            .map_err(|error| EngineError::Runner(error.to_string()))?,
+        cwd: path_setting(settings, "cwd", lane_id)
+            .map_err(|error| EngineError::Runner(error.to_string()))?
+            .into(),
+        timeout: Duration::seconds(
+            timeout_setting(settings, lane_id)
+                .map_err(|error| EngineError::Runner(error.to_string()))?,
+        ),
+        capture_stdout: bool_setting(settings, "captureStdout", true, lane_id)
+            .map_err(|error| EngineError::Runner(error.to_string()))?,
+        capture_stderr: bool_setting(settings, "captureStderr", true, lane_id)
+            .map_err(|error| EngineError::Runner(error.to_string()))?,
+        side_effect_policy: ScriptSideEffectPolicy::StageTransformBoundary,
+    })
 }
 
 fn string_setting(settings: &Value, key: &str, lane_id: &str) -> Result<String, AgentError> {

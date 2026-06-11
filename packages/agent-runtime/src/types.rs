@@ -168,6 +168,8 @@ pub struct AgentRunReport {
     pub lane_execution_count: usize,
     pub produced_frame_count: usize,
     pub enqueued_batch_count: usize,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +181,11 @@ pub struct FlushReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ControlMessage {
     ReloadLaneConfig {
         config: LaneConfig,
