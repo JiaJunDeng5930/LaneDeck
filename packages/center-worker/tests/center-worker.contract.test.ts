@@ -187,6 +187,34 @@ describe("center-worker contract", () => {
     });
   });
 
+  it("WebSocket routes proxy upgrade requests through the workspace fetch handler", async () => {
+    let fetchedPath = "";
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/ws/browser?workspaceId=workspace.local",
+        {
+          method: "GET",
+          headers: { upgrade: "websocket" },
+        },
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => ({
+            fetch: async (request: Request) => {
+              fetchedPath = new URL(request.url).pathname;
+              return new Response(null, { status: 204 });
+            },
+          }),
+        },
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(fetchedPath).toBe("/ws/browser");
+  });
+
   it("browser WSS receives content_changed after content mutation", async () => {
     const harness = createHarness();
     const browser = new RecordingSocket();
@@ -274,7 +302,17 @@ function createHarness() {
   });
   const env = {
     WORKSPACE_COORDINATOR: {
-      getByName: () => workspace,
+      getByName: () => ({
+        ...workspace,
+        ingest: (batch: IngestBatch) => workspace.ingest(batch),
+        query: (request: Parameters<WorkspaceService["query"]>[0]) =>
+          workspace.query(request),
+        mutate: (request: Parameters<WorkspaceService["mutate"]>[0]) =>
+          workspace.mutate(request),
+        connectAgent: async () => new Response(null, { status: 204 }),
+        connectBrowser: async () => new Response(null, { status: 204 }),
+        fetch: async () => new Response(null, { status: 204 }),
+      }),
     },
     LANEDECK_DB: {},
     LANEDECK_BUCKET: {},

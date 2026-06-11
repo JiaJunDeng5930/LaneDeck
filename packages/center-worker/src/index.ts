@@ -56,6 +56,23 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     return this.openLiveSocket(request, "browser");
   }
 
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/ws/agent") {
+      return this.openLiveSocket(request, "agent");
+    }
+
+    if (url.pathname === "/ws/browser") {
+      return this.openLiveSocket(request, "browser");
+    }
+
+    return errorResponse(
+      new ApiError(404, "route_not_found", [
+        { path: "path", message: "expected workspace WebSocket route" },
+      ]),
+    );
+  }
+
   async alarm(): Promise<void> {
     await this.service.alarm(this.ctx.id.name ?? "workspace");
   }

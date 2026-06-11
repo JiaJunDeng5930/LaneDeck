@@ -13,6 +13,7 @@ export interface WorkspaceCoordinatorRpc {
   mutate(request: MutationRequest): Promise<MutationResult>;
   connectAgent(request: Request): Promise<Response>;
   connectBrowser(request: Request): Promise<Response>;
+  fetch(request: Request): Promise<Response>;
 }
 
 export interface WorkspaceCoordinatorNamespace {

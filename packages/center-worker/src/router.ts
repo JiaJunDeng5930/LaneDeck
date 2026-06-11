@@ -73,14 +73,12 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/agent") {
     ensureWebSocketUpgrade(request);
-    return await workspace(env, requiredWorkspaceId(url)).connectAgent(request);
+    return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
-    return await workspace(env, requiredWorkspaceId(url)).connectBrowser(
-      request,
-    );
+    return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws/")) {
