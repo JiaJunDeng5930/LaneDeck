@@ -17,10 +17,12 @@ export {
 export {
   createWindowShellBridge,
   parseContentRoute,
+  parseShellHostStateMessage,
   parseShellInitMessage,
   type ShellBridge,
   type ShellHostState,
   type ShellInitMessage,
+  type ShellSubscription,
   type WindowShellBridgeOptions,
 } from "./shell";
 export {

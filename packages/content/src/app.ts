@@ -14,6 +14,7 @@ import {
   type ContentRoute,
 } from "./query";
 import type { ShellBridge, ShellHostState } from "./shell";
+import type { ShellSubscription } from "./shell";
 import { renderDashboardMarkup, renderErrorMarkup } from "./views";
 
 export interface ContentDeps {
@@ -45,6 +46,10 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     async init() {
       try {
         const init = await deps.shell.waitForInit();
+        if (disposed) {
+          return;
+        }
+
         applyHostState(init.hostState);
         await send({
           type: "ready",
@@ -56,7 +61,12 @@ export function createContentApp(deps: ContentDeps): ContentApp {
           await app.render(route);
         }
       } catch (error) {
+        if (disposed) {
+          return;
+        }
+
         renderError("content init failed", error);
+        await reportHeight();
         await reportError("content init failed", error);
       }
     },
@@ -75,12 +85,14 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         const rendered = renderDashboardMarkup(route, response);
         root.innerHTML = rendered.html;
         activeRegistrations = bindRenderedPickTargets(root);
+        await reportHeight();
       } catch (error) {
         if (sequence !== renderSequence || disposed) {
           return;
         }
 
         renderError("content render failed", error);
+        await reportHeight();
         await reportError("content render failed", error);
       }
     },
@@ -103,9 +115,17 @@ export function createContentApp(deps: ContentDeps): ContentApp {
       renderSequence += 1;
       setPickerListening(false);
       clearActiveRegistrations();
+      hostStateSubscription?.unsubscribe();
       pickSubscription.unregister();
     },
   };
+
+  const hostStateSubscription: ShellSubscription | undefined =
+    deps.shell.subscribeHostState?.((state) => {
+      if (!disposed) {
+        app.setHostState(state);
+      }
+    });
 
   async function send(message: ShellContentMessage): Promise<void> {
     if (!disposed) {
@@ -133,6 +153,31 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     } catch {
       return;
     }
+  }
+
+  async function reportHeight(): Promise<void> {
+    try {
+      await send({
+        type: "height_changed",
+        payload: { height: measureContentHeight() },
+      });
+    } catch {
+      return;
+    }
+  }
+
+  function measureContentHeight(): number {
+    const root = globalThis.document?.getElementById("root");
+    const body = globalThis.document?.body;
+    const documentElement = globalThis.document?.documentElement;
+
+    return Math.ceil(
+      Math.max(
+        root?.scrollHeight ?? 0,
+        body?.scrollHeight ?? 0,
+        documentElement?.scrollHeight ?? 0,
+      ),
+    );
   }
 
   function clearActiveRegistrations(): void {

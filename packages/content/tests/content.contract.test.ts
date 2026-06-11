@@ -11,6 +11,7 @@ import {
   registerPickTarget,
   type CenterQueryClient,
   type ShellBridge,
+  type ShellHostState,
   type ShellInitMessage,
 } from "../src/index";
 
@@ -50,9 +51,10 @@ describe("content package contract", () => {
       ],
       diagnostics: [],
     });
+    const shell = new FakeShell({ hostState: { pickerEnabled: false } });
     const app = createContentApp({
       query,
-      shell: new FakeShell({ hostState: { pickerEnabled: false } }),
+      shell,
     });
 
     await app.render({
@@ -70,6 +72,10 @@ describe("content package contract", () => {
     ]);
     expect(document.root.innerHTML).toContain("build complete");
     expect(document.root.innerHTML).toContain("lane.build");
+    expect(shell.messages).toContainEqual({
+      type: "height_changed",
+      payload: { height: 320 },
+    });
     app.dispose();
   });
 
@@ -102,6 +108,34 @@ describe("content package contract", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(document.root.innerHTML).toContain("shell boot render");
+    app.dispose();
+  });
+
+  it("applies picker mode updates after shell init", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const target = new TestPickElement();
+
+    await app.init();
+    const registration = registerPickTarget({
+      pickId: "content/source/dashboard.tsx:55",
+      element: target as unknown as HTMLElement,
+    });
+    target.dispatch("click");
+    shell.updateHostState({ pickerEnabled: true });
+    target.dispatch("click");
+
+    expect(shell.messages).toContainEqual({
+      type: "pick_result",
+      payload: { pickId: "content/source/dashboard.tsx:55" },
+    });
+
+    registration.unregister();
     app.dispose();
   });
 
@@ -218,8 +252,32 @@ describe("content package contract", () => {
         }),
       }),
     );
+    expect(shell.messages).toContainEqual({
+      type: "height_changed",
+      payload: { height: 320 },
+    });
     expect(document.root.innerHTML).toContain("content render failed");
     app.dispose();
+  });
+
+  it("ignores init that arrives after disposal", async () => {
+    const shell = new DeferredShell();
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const init = app.init();
+
+    app.dispose();
+    shell.resolve({
+      hostState: {
+        pickerEnabled: true,
+        route: { view: "dashboard", workspaceId: "workspace.local" },
+      },
+    });
+    await init;
+
+    expect(shell.messages).toEqual([]);
   });
 });
 
@@ -259,6 +317,9 @@ class DeferredQuery implements CenterQueryClient {
 
 class FakeShell implements ShellBridge {
   readonly messages: ShellContentMessage[] = [];
+  private readonly hostStateListeners = new Set<
+    (state: ShellHostState) => void
+  >();
 
   constructor(private readonly initMessage: ShellInitMessage) {}
 
@@ -268,6 +329,43 @@ class FakeShell implements ShellBridge {
 
   async send(message: ShellContentMessage): Promise<void> {
     this.messages.push(message);
+  }
+
+  subscribeHostState(listener: (state: ShellHostState) => void): {
+    unsubscribe(): void;
+  } {
+    this.hostStateListeners.add(listener);
+
+    return {
+      unsubscribe: () => {
+        this.hostStateListeners.delete(listener);
+      },
+    };
+  }
+
+  updateHostState(state: ShellHostState): void {
+    for (const listener of this.hostStateListeners) {
+      listener(state);
+    }
+  }
+}
+
+class DeferredShell implements ShellBridge {
+  readonly messages: ShellContentMessage[] = [];
+  private resolveInit: ((message: ShellInitMessage) => void) | undefined;
+
+  async waitForInit(): Promise<ShellInitMessage> {
+    return new Promise((resolve) => {
+      this.resolveInit = resolve;
+    });
+  }
+
+  async send(message: ShellContentMessage): Promise<void> {
+    this.messages.push(message);
+  }
+
+  resolve(message: ShellInitMessage): void {
+    this.resolveInit?.(message);
   }
 }
 
@@ -281,6 +379,7 @@ class TestDocument {
 
 class TestRootElement {
   innerHTML = "";
+  scrollHeight = 320;
 
   querySelectorAll(): HTMLElement[] {
     return [];

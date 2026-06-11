@@ -23,6 +23,13 @@ export interface ShellInitMessage {
 export interface ShellBridge {
   waitForInit(): Promise<ShellInitMessage>;
   send(message: ShellContentMessage): Promise<void>;
+  subscribeHostState?(
+    listener: (state: ShellHostState) => void,
+  ): ShellSubscription;
+}
+
+export interface ShellSubscription {
+  unsubscribe(): void;
 }
 
 export interface WindowShellBridgeOptions {
@@ -50,10 +57,7 @@ export function createWindowShellBridge(
         }, initTimeoutMs);
 
         const handleMessage = (event: MessageEvent<unknown>) => {
-          if (
-            event.source !== windowRef.parent ||
-            (shellOrigin !== undefined && event.origin !== shellOrigin)
-          ) {
+          if (!isTrustedShellEvent(event, windowRef, shellOrigin)) {
             return;
           }
 
@@ -80,7 +84,38 @@ export function createWindowShellBridge(
       parseShellContentMessage(message);
       windowRef.parent.postMessage(message, targetOrigin);
     },
+    subscribeHostState(listener) {
+      const handleMessage = (event: MessageEvent<unknown>) => {
+        if (!isTrustedShellEvent(event, windowRef, shellOrigin)) {
+          return;
+        }
+
+        const state = parseShellHostStateMessage(event.data);
+        if (state !== undefined) {
+          listener(state);
+        }
+      };
+
+      windowRef.addEventListener("message", handleMessage);
+
+      return {
+        unsubscribe() {
+          windowRef.removeEventListener("message", handleMessage);
+        },
+      };
+    },
   };
+}
+
+function isTrustedShellEvent(
+  event: MessageEvent<unknown>,
+  windowRef: Window,
+  shellOrigin: string | undefined,
+): boolean {
+  return (
+    event.source === windowRef.parent &&
+    (shellOrigin === undefined || event.origin === shellOrigin)
+  );
 }
 
 export function parseShellInitMessage(
@@ -95,6 +130,17 @@ export function parseShellInitMessage(
   const route = parseContentRoute(payload.route ?? hostState.route);
 
   return route === undefined ? { hostState } : { hostState, route };
+}
+
+export function parseShellHostStateMessage(
+  input: unknown,
+): ShellHostState | undefined {
+  if (!isRecord(input) || input.type !== "host_state") {
+    return undefined;
+  }
+
+  const payload = recordAt(input, "payload");
+  return parseHostState(payload.hostState ?? payload);
 }
 
 export function parseContentRoute(input: unknown): ContentRoute | undefined {
