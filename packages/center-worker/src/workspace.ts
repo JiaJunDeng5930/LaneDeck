@@ -206,6 +206,28 @@ export class WorkspaceService {
   }
 }
 
+export function validateQueryRequestName(request: QueryRequest): void {
+  if (
+    request.query === "current_state" ||
+    request.query === "current_content"
+  ) {
+    return;
+  }
+
+  throw badRequest("unknown_query", "query", "expected supported query name");
+}
+
+export function validateMutationRequestPayload(request: MutationRequest): void {
+  if (request.mutation === "patch_content") {
+    readPatchContentPayload(request.payload);
+    return;
+  }
+
+  if (request.mutation === "patch_lane_config") {
+    readPatchLaneConfigPayload(request.payload);
+  }
+}
+
 function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
   const sourcePath = normalizeObjectPath(
     requiredString(payload, "path"),

@@ -45,14 +45,35 @@ export class R2ContentStore {
       return null;
     }
 
+    const contentType =
+      object.httpMetadata?.contentType ?? contentTypeFor(normalizedAssetPath);
+    if (
+      normalizedAssetPath.endsWith(".html") ||
+      contentType.startsWith("text/html")
+    ) {
+      return new Response(
+        rewriteViteAssetReferences(await object.text(), normalizedRevision),
+        { headers: { "content-type": contentType } },
+      );
+    }
+
     return new Response(object.body, {
-      headers: {
-        "content-type":
-          object.httpMetadata?.contentType ??
-          contentTypeFor(normalizedAssetPath),
-      },
+      headers: { "content-type": contentType },
     });
   }
+}
+
+export function rewriteViteAssetReferences(
+  html: string,
+  revision: string,
+): string {
+  const assetBase = `/content/${normalizeObjectPath(
+    revision,
+    "revision",
+  )}/assets/`;
+  return html
+    .replaceAll('"/assets/', `"${assetBase}`)
+    .replaceAll("'/assets/", `'${assetBase}`);
 }
 
 export function normalizeObjectPath(value: string, path: string): string {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
 import { handleRequest } from "../src/router";
+import { rewriteViteAssetReferences } from "../src/storage/r2";
 import type {
   CenterStorage,
   ContentObjectKeys,
@@ -106,6 +107,48 @@ describe("center-worker contract", () => {
       diagnostics: [],
     });
     expect(harness.storage.writeCount).toBe(writesBeforeQuery);
+  });
+
+  it("keeps same batch ids from different machines distinct in current state", async () => {
+    const harness = createHarness();
+    await harness.workspace.ingest({
+      workspaceId: "workspace.local",
+      machineId: "machine-a",
+      batchId: "batch-1",
+      frames: [validFrame],
+    });
+    await harness.workspace.ingest({
+      workspaceId: "workspace.local",
+      machineId: "machine-b",
+      batchId: "batch-1",
+      frames: [{ ...validFrame, frameNo: 2 }],
+    });
+
+    const response = await handleRequest(
+      jsonRequest("/api/query", {
+        workspaceId: "workspace.local",
+        query: "current_state",
+        params: {},
+      }),
+      harness.env,
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      rows: [
+        {
+          frames: [
+            expect.objectContaining({
+              machineId: "machine-a",
+              batchId: "batch-1",
+            }),
+            expect.objectContaining({
+              machineId: "machine-b",
+              batchId: "batch-1",
+            }),
+          ],
+        },
+      ],
+    });
   });
 
   it("POST /api/ai/mutation writes content source to R2 and metadata to D1", async () => {
@@ -286,6 +329,17 @@ describe("center-worker contract", () => {
       expect.objectContaining({ type: "build_content" }),
     );
   });
+
+  it("rewrites Vite root asset URLs into revision-scoped content URLs", () => {
+    expect(
+      rewriteViteAssetReferences(
+        '<link rel="stylesheet" href="/assets/index.css"><script src="/assets/index.js"></script>',
+        "revision-1",
+      ),
+    ).toBe(
+      '<link rel="stylesheet" href="/content/revision-1/assets/index.css"><script src="/content/revision-1/assets/index.js"></script>',
+    );
+  });
 });
 
 function createHarness() {
@@ -386,6 +440,7 @@ class MemoryCenterStorage implements CenterStorage {
           ? batch.frames.map((frame) => ({
               batchId: batch.batchId,
               laneId: frame.laneId,
+              machineId: batch.machineId,
               stage: frame.stage,
               frameNo: frame.frameNo,
               triggerKind: frame.triggerKind,

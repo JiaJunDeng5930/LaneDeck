@@ -13,6 +13,10 @@ import {
   readJson,
 } from "./errors";
 import { R2ContentStore } from "./storage/r2";
+import {
+  validateMutationRequestPayload,
+  validateQueryRequestName,
+} from "./workspace";
 
 import type { CenterWorkerEnv } from "./runtime-types";
 
@@ -46,11 +50,13 @@ async function routeRequest(
 
   if (request.method === "POST" && url.pathname === "/api/query") {
     const query = parseQueryRequest(await readJson(request));
+    validateQueryRequestName(query);
     return jsonResponse(await workspace(env, query.workspaceId).query(query));
   }
 
   if (request.method === "POST" && url.pathname === "/api/ai/mutation") {
     const mutation = parseMutationRequest(await readJson(request));
+    validateMutationRequestPayload(mutation);
     return jsonResponse(
       await workspace(env, mutation.workspaceId).mutate(mutation),
     );
