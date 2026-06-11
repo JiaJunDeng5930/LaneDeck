@@ -122,6 +122,7 @@ describe("content package contract", () => {
     });
     target.dispatch("click");
 
+    expect(target.preventDefaultCalls).toBe(1);
     expect(target.stopPropagationCalls).toBe(1);
     expect(shell.messages).toContainEqual({
       type: "pick_result",
@@ -129,6 +130,70 @@ describe("content package contract", () => {
     });
 
     registration.unregister();
+    app.dispose();
+  });
+
+  it("leaves target clicks alone while picker mode is disabled", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const target = new TestPickElement();
+
+    await app.init();
+    const registration = registerPickTarget({
+      pickId: "content/source/dashboard.tsx:44",
+      element: target as unknown as HTMLElement,
+    });
+    target.dispatch("click");
+
+    expect(target.preventDefaultCalls).toBe(0);
+    expect(target.stopPropagationCalls).toBe(0);
+    expect(shell.messages).not.toContainEqual(
+      expect.objectContaining({ type: "pick_result" }),
+    );
+
+    registration.unregister();
+    app.dispose();
+  });
+
+  it("renders only the latest route when queries resolve out of order", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const query = new DeferredQuery();
+    const app = createContentApp({
+      query,
+      shell: new FakeShell({ hostState: { pickerEnabled: false } }),
+    });
+
+    const firstRender = app.render({
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.first",
+    });
+    const secondRender = app.render({
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.second",
+    });
+
+    query.resolve("lane.second", {
+      rows: [{ eventText: "second route event" }],
+      diagnostics: [],
+    });
+    await secondRender;
+
+    query.resolve("lane.first", {
+      rows: [{ eventText: "first route event" }],
+      diagnostics: [],
+    });
+    await firstRender;
+
+    expect(document.root.innerHTML).toContain("second route event");
+    expect(document.root.innerHTML).not.toContain("first route event");
     app.dispose();
   });
 
@@ -175,6 +240,23 @@ class RejectingQuery implements CenterQueryClient {
   }
 }
 
+class DeferredQuery implements CenterQueryClient {
+  private readonly pending = new Map<
+    string,
+    (response: QueryResponse) => void
+  >();
+
+  async query(request: QueryRequest): Promise<QueryResponse> {
+    return new Promise((resolve) => {
+      this.pending.set(String(request.params.laneId), resolve);
+    });
+  }
+
+  resolve(laneId: string, response: QueryResponse): void {
+    this.pending.get(laneId)?.(response);
+  }
+}
+
 class FakeShell implements ShellBridge {
   readonly messages: ShellContentMessage[] = [];
 
@@ -208,6 +290,7 @@ class TestRootElement {
 class TestPickElement {
   readonly listeners = new Map<string, EventListener>();
   readonly attributes = new Map<string, string>();
+  preventDefaultCalls = 0;
   stopPropagationCalls = 0;
 
   setAttribute(name: string, value: string): void {
@@ -232,8 +315,8 @@ class TestPickElement {
 
   dispatch(name: string): void {
     this.listeners.get(name)?.({
-      preventDefault() {
-        return;
+      preventDefault: () => {
+        this.preventDefaultCalls += 1;
       },
       stopPropagation: () => {
         this.stopPropagationCalls += 1;

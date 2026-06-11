@@ -3,6 +3,7 @@ import { protocolPackage, type ShellContentMessage } from "@lanedeck/protocol";
 import { ContentError, errorDetail } from "./errors";
 import {
   registerPickTarget,
+  setPickerListening,
   subscribePickTargets,
   type PickRegistration,
   type PickTarget,
@@ -31,6 +32,7 @@ export interface ContentApp {
 export function createContentApp(deps: ContentDeps): ContentApp {
   let hostState: ShellHostState = { pickerEnabled: false };
   let activeRegistrations: PickRegistration[] = [];
+  let renderSequence = 0;
   let disposed = false;
 
   const pickSubscription = subscribePickTargets((target) => {
@@ -60,15 +62,24 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     },
 
     async render(route) {
+      const sequence = (renderSequence += 1);
       clearActiveRegistrations();
 
       try {
         const response = await deps.query.query(dashboardQueryRequest(route));
+        if (sequence !== renderSequence || disposed) {
+          return;
+        }
+
         const root = resolveRoot();
         const rendered = renderDashboardMarkup(route, response);
         root.innerHTML = rendered.html;
         activeRegistrations = bindRenderedPickTargets(root);
       } catch (error) {
+        if (sequence !== renderSequence || disposed) {
+          return;
+        }
+
         renderError("content render failed", error);
         await reportError("content render failed", error);
       }
@@ -89,6 +100,8 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
     dispose() {
       disposed = true;
+      renderSequence += 1;
+      setPickerListening(false);
       clearActiveRegistrations();
       pickSubscription.unregister();
     },
@@ -131,6 +144,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
   function applyHostState(state: ShellHostState): void {
     hostState = state;
+    setPickerListening(state.pickerEnabled);
     if (state.centerQueryEndpoint !== undefined) {
       deps.query.setEndpoint?.(state.centerQueryEndpoint);
     }

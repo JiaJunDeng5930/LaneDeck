@@ -28,6 +28,7 @@ export interface ShellBridge {
 export interface WindowShellBridgeOptions {
   window?: Window;
   targetOrigin?: string;
+  shellOrigin?: string;
   initTimeoutMs?: number;
 }
 
@@ -36,6 +37,8 @@ export function createWindowShellBridge(
 ): ShellBridge {
   const windowRef = options.window ?? globalThis.window;
   const targetOrigin = options.targetOrigin ?? "*";
+  const shellOrigin =
+    options.shellOrigin ?? (targetOrigin === "*" ? undefined : targetOrigin);
   const initTimeoutMs = options.initTimeoutMs ?? 5_000;
 
   return {
@@ -47,6 +50,13 @@ export function createWindowShellBridge(
         }, initTimeoutMs);
 
         const handleMessage = (event: MessageEvent<unknown>) => {
+          if (
+            event.source !== windowRef.parent ||
+            (shellOrigin !== undefined && event.origin !== shellOrigin)
+          ) {
+            return;
+          }
+
           try {
             const init = parseShellInitMessage(event.data);
             if (init === undefined) {
