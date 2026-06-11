@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ContentError,
   createWindowShellBridge,
+  parseContentRoute,
   parseShellInitMessage,
 } from "../src/index";
 
@@ -110,6 +111,25 @@ describe("window shell bridge", () => {
       parseShellInitMessage({
         type: "init",
         payload: { hostState: { pickerEnabled: "true" } },
+      }),
+    ).toThrow(ContentError);
+  });
+
+  it("rejects route params outside protocol JSON", () => {
+    expect(() =>
+      parseContentRoute({
+        view: "dashboard",
+        workspaceId: "workspace.local",
+        params: { threshold: Number.NaN },
+      }),
+    ).toThrow(ContentError);
+
+    expect(() =>
+      parseContentRoute({
+        view: "custom",
+        workspaceId: "workspace.local",
+        query: "events",
+        params: { since: new Date("2026-06-11T00:00:00.000Z") },
       }),
     ).toThrow(ContentError);
   });

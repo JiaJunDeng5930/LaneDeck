@@ -214,7 +214,7 @@ function optionalJsonObjectAt(
     throw new ContentError(`${key} must be an object`);
   }
 
-  return value;
+  return parseJsonObject(value, key, new WeakSet<object>());
 }
 
 function recordAt(input: Record<string, unknown>, key: string): JsonObject {
@@ -267,4 +267,67 @@ function isRecord(input: unknown): input is JsonObject {
     !Array.isArray(input) &&
     Object.getPrototypeOf(input) === Object.prototype
   );
+}
+
+function parseJsonObject(
+  input: unknown,
+  path: string,
+  activeContainers: WeakSet<object>,
+): JsonObject {
+  if (!isRecord(input)) {
+    throw new ContentError(`${path} must be an object`);
+  }
+
+  if (activeContainers.has(input)) {
+    throw new ContentError(`${path} must be acyclic JSON`);
+  }
+
+  activeContainers.add(input);
+  for (const [key, value] of Object.entries(input)) {
+    assertJsonValue(value, `${path}.${key}`, activeContainers);
+  }
+  activeContainers.delete(input);
+
+  return input;
+}
+
+function assertJsonValue(
+  input: unknown,
+  path: string,
+  activeContainers: WeakSet<object>,
+): void {
+  if (
+    input === null ||
+    typeof input === "string" ||
+    typeof input === "boolean"
+  ) {
+    return;
+  }
+
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return;
+  }
+
+  if (Array.isArray(input)) {
+    if (activeContainers.has(input)) {
+      throw new ContentError(`${path} must be acyclic JSON`);
+    }
+
+    activeContainers.add(input);
+    for (let index = 0; index < input.length; index += 1) {
+      if (!(index in input)) {
+        throw new ContentError(`${path}.${index} must be JSON`);
+      }
+      assertJsonValue(input[index], `${path}.${index}`, activeContainers);
+    }
+    activeContainers.delete(input);
+    return;
+  }
+
+  if (isRecord(input)) {
+    parseJsonObject(input, path, activeContainers);
+    return;
+  }
+
+  throw new ContentError(`${path} must be JSON`);
 }
