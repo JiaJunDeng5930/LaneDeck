@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use lanedeck_protocol::{IngestAck, IngestBatch};
+use lanedeck_protocol::{Diagnostic, IngestAck, IngestBatch};
 
 use crate::{
     AgentError, ControlConnectRequest, ControlSession, RetryReason, ScriptRunOutput,
@@ -24,6 +24,12 @@ pub trait LocalSpool {
     fn mark_acked(&mut self, ids: &[SpoolEntryId]) -> Result<(), AgentError>;
 
     fn mark_retry(&mut self, ids: &[SpoolEntryId], reason: RetryReason) -> Result<(), AgentError>;
+
+    fn mark_rejected(
+        &mut self,
+        ids: &[SpoolEntryId],
+        diagnostics: Vec<Diagnostic>,
+    ) -> Result<(), AgentError>;
 }
 
 pub trait ScriptRunner {

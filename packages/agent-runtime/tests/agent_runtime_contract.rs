@@ -8,8 +8,8 @@ use serde_json::json;
 use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, content_root, diagnostic_script_output, duration,
     empty_metric_agent_config, ingest_batch, instant, pending_spool_entry,
-    reloaded_script_lane_config, script_lane_agent_config, scripted_metric_agent_config,
-    successful_script_output,
+    reloaded_script_lane_config, script_lane_agent_config, script_output_with_record,
+    scripted_metric_agent_config, successful_script_output, two_record_frame_agent_config,
 };
 
 #[tokio::test]
@@ -76,7 +76,7 @@ async fn network_failure_marks_entries_retry_pending() {
 }
 
 #[tokio::test]
-async fn validation_ack_marks_entries_retry_pending() {
+async fn validation_ack_marks_entries_rejected_and_removed() {
     let now = instant(1_700_012_500);
     let batch = ingest_batch("batch-3", now);
     let center = CenterProbe::rejecting_validation();
@@ -88,10 +88,12 @@ async fn validation_ack_marks_entries_retry_pending() {
     let report = service.flush_spool().await.unwrap();
 
     assert!(spool.acked_ids().is_empty());
-    assert_eq!(spool.retry_ids(), vec![SpoolEntryId::from("spool-3")]);
-    assert_eq!(spool.pending_entries().len(), 1);
+    assert!(spool.retry_ids().is_empty());
+    assert_eq!(spool.rejected_ids(), vec![SpoolEntryId::from("spool-3")]);
+    assert_eq!(spool.rejected_diagnostics()[0].path, "frames[0]");
+    assert!(spool.pending_entries().is_empty());
     assert_eq!(report.uploaded_batch_count, 1);
-    assert_eq!(report.retry_entry_count, 1);
+    assert_eq!(report.rejected_entry_count, 1);
 }
 
 #[tokio::test]
@@ -171,6 +173,17 @@ fn control_messages_accept_camel_case_protocol_fields() {
         }
         other => panic!("unexpected control message: {other:?}"),
     }
+}
+
+#[test]
+fn unknown_control_message_tags_decode_to_unknown_variant() {
+    let message: ControlMessage = serde_json::from_value(json!({
+        "type": "future_command",
+        "contentId": "dashboard-main"
+    }))
+    .unwrap();
+
+    assert_eq!(message, ControlMessage::unknown("future_command"));
 }
 
 #[tokio::test]
@@ -254,11 +267,52 @@ async fn scripted_downstream_stage_runs_through_script_runner() {
     assert_eq!(requests[1].purpose, ScriptPurpose::TransformStage);
     assert_eq!(requests[1].command, "metric-cpu");
     assert_eq!(requests[1].cwd, "/var/lib/lanedeck/stages/metric");
+    let input = requests[1].input.as_ref().unwrap();
+    assert_eq!(input["currentFrame"]["stage"], "raw");
+    assert_eq!(input["currentFrame"]["records"][0]["id"], "raw:1");
+    assert_eq!(input["lane"]["laneId"], "lane.cpu");
+    assert!(input["history"].is_object());
     assert_eq!(requests[1].timeout, duration(7));
     assert_eq!(
         requests[1].side_effect_policy,
         ScriptSideEffectPolicy::StageTransformBoundary
     );
+}
+
+#[tokio::test]
+async fn lane_collection_state_survives_between_runs() {
+    let first = instant(1_700_016_500);
+    let second = instant(1_700_016_501);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        script_output_with_record("raw:first", first),
+        script_output_with_record("raw:second", second),
+    ]);
+    let mut service = AgentService::new(
+        two_record_frame_agent_config(),
+        center,
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    let first_report = service.run_once(first).await.unwrap();
+    let second_report = service.run_once(second).await.unwrap();
+    let enqueued = spool.enqueued_batches();
+
+    assert_eq!(first_report.enqueued_batch_count, 0);
+    assert_eq!(second_report.enqueued_batch_count, 1);
+    assert_eq!(enqueued.len(), 1);
+    let raw_frame = enqueued[0]
+        .frames
+        .iter()
+        .find(|frame| frame.stage == lanedeck_protocol::StageKind::Raw)
+        .unwrap();
+    assert_eq!(raw_frame.frame_no, 1);
+    assert_eq!(raw_frame.record_count, 2);
+    assert_eq!(raw_frame.records[0].id, "raw:first");
+    assert_eq!(raw_frame.records[1].id, "raw:second");
 }
 
 #[tokio::test]

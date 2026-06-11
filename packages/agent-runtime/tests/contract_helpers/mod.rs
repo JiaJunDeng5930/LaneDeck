@@ -8,7 +8,7 @@ use lanedeck_agent_runtime::{
     AgentConfig, AgentError, CenterClient, ControlConnectRequest, ControlSession, LocalSpool,
     RetryReason, ScriptRunOutput, ScriptRunRequest, ScriptRunner, SpoolEntry, SpoolEntryId,
 };
-use lanedeck_protocol::{Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig};
+use lanedeck_protocol::{Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig};
 use serde_json::{Value, json};
 
 pub fn instant(seconds: i64) -> DateTime<Utc> {
@@ -33,6 +33,12 @@ pub fn scripted_metric_agent_config() -> AgentConfig {
         "captureStdout": true,
         "captureStderr": true
     });
+    agent_config_with_lane(lane)
+}
+
+pub fn two_record_frame_agent_config() -> AgentConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    lane.raw_stage.settings["frame"]["maxRecords"] = json!(2);
     agent_config_with_lane(lane)
 }
 
@@ -141,6 +147,10 @@ pub fn successful_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
     ScriptRunOutput::from_json_records(vec![raw_record("raw:1", now)])
 }
 
+pub fn script_output_with_record(id: &str, now: DateTime<Utc>) -> ScriptRunOutput {
+    ScriptRunOutput::from_json_records(vec![raw_record(id, now)])
+}
+
 pub fn diagnostic_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
     from_json(json!({
         "records": [raw_record("raw:1", now)],
@@ -243,6 +253,8 @@ struct SpoolProbeState {
     pending_entries: Vec<SpoolEntry>,
     acked_ids: Vec<SpoolEntryId>,
     retry_ids: Vec<SpoolEntryId>,
+    rejected_ids: Vec<SpoolEntryId>,
+    rejected_diagnostics: Vec<Diagnostic>,
 }
 
 impl SpoolProbe {
@@ -269,6 +281,14 @@ impl SpoolProbe {
 
     pub fn retry_ids(&self) -> Vec<SpoolEntryId> {
         self.inner.lock().unwrap().retry_ids.clone()
+    }
+
+    pub fn rejected_ids(&self) -> Vec<SpoolEntryId> {
+        self.inner.lock().unwrap().rejected_ids.clone()
+    }
+
+    pub fn rejected_diagnostics(&self) -> Vec<Diagnostic> {
+        self.inner.lock().unwrap().rejected_diagnostics.clone()
     }
 }
 
@@ -306,6 +326,20 @@ impl LocalSpool for SpoolProbe {
 
     fn mark_retry(&mut self, ids: &[SpoolEntryId], _reason: RetryReason) -> Result<(), AgentError> {
         self.inner.lock().unwrap().retry_ids.extend_from_slice(ids);
+        Ok(())
+    }
+
+    fn mark_rejected(
+        &mut self,
+        ids: &[SpoolEntryId],
+        diagnostics: Vec<Diagnostic>,
+    ) -> Result<(), AgentError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.rejected_ids.extend_from_slice(ids);
+        inner.rejected_diagnostics.extend(diagnostics);
+        inner
+            .pending_entries
+            .retain(|entry| !ids.contains(&entry.id));
         Ok(())
     }
 }

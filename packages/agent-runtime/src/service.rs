@@ -22,17 +22,17 @@ const BUILD_CONTENT_TIMEOUT_SECONDS: i64 = 300;
 pub struct AgentService<C, P, R> {
     center: C,
     spool: P,
-    runner: R,
+    runner: Arc<R>,
     workspace_id: String,
     machine_id: String,
     flush_limit: usize,
-    lanes: Vec<LaneRuntime>,
+    lanes: Vec<LaneRuntime<R>>,
     next_batch_no: u64,
 }
 
-struct LaneRuntime {
+struct LaneRuntime<R> {
     lane: LaneConfig,
-    history: ServiceHistoryStore,
+    engine: LaneEngine<ServiceHistoryStore, ServiceStageRunner<R>>,
 }
 
 #[derive(Clone, Default)]
@@ -54,12 +54,13 @@ where
     R: ScriptRunner,
 {
     pub fn new(config: AgentConfig, center: C, spool: P, runner: R) -> Result<Self, AgentError> {
+        let runner = Arc::new(runner);
         let mut lanes = Vec::with_capacity(config.lanes.len());
 
         for lane in config.lanes {
             let lane_config = lane.config;
             validate_script_raw_stage(&lane_config)?;
-            lanes.push(LaneRuntime::new(lane_config)?);
+            lanes.push(LaneRuntime::new(lane_config, runner.clone())?);
         }
 
         Ok(Self {
@@ -85,7 +86,7 @@ where
 
             let effects = {
                 let lane = &mut self.lanes[lane_index];
-                run_lane_pipeline(lane, &self.runner, output, now)?
+                run_lane_pipeline(lane, output, now)?
             };
             let (frames, diagnostics) = split_effects(effects);
             report.diagnostics.extend(diagnostics);
@@ -104,11 +105,7 @@ where
     }
 
     pub async fn flush_spool(&mut self) -> Result<FlushReport, AgentError> {
-        let mut report = FlushReport {
-            uploaded_batch_count: 0,
-            acked_entry_count: 0,
-            retry_entry_count: 0,
-        };
+        let mut report = FlushReport::default();
         let entries = self.spool.pending_batch(self.flush_limit)?;
 
         for entry in entries {
@@ -120,12 +117,12 @@ where
                     report.acked_entry_count += 1;
                 }
                 Ok(ack) => {
-                    self.spool.mark_retry(
+                    self.spool.mark_rejected(
                         std::slice::from_ref(&id),
-                        RetryReason::network(ack_retry_message(&ack, &entry.batch)),
+                        ack_rejection_diagnostics(&ack, &entry.batch),
                     )?;
                     report.uploaded_batch_count += 1;
-                    report.retry_entry_count += 1;
+                    report.rejected_entry_count += 1;
                 }
                 Err(error) => {
                     let reason = RetryReason::network(error.to_string());
@@ -157,6 +154,7 @@ where
                     lane_id: content_id,
                     command,
                     cwd: cwd.into(),
+                    input: None,
                     timeout: Duration::seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
                     capture_stderr: true,
@@ -181,6 +179,7 @@ where
                     lane_id: "content.local".to_string(),
                     command,
                     cwd: cwd.into(),
+                    input: None,
                     timeout: Duration::seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
                     capture_stderr: true,
@@ -197,7 +196,7 @@ where
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
         validate_script_raw_stage(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
-        let runtime = LaneRuntime::new(lane_config)?;
+        let runtime = LaneRuntime::new(lane_config, self.runner.clone())?;
 
         if let Some(existing) = self
             .lanes
@@ -231,22 +230,35 @@ fn ack_is_complete(ack: &IngestAck, batch: &IngestBatch) -> bool {
         && ack.diagnostics.is_empty()
 }
 
-fn ack_retry_message(ack: &IngestAck, batch: &IngestBatch) -> String {
-    format!(
-        "center accepted {}/{} frames for batch {} with {} diagnostics",
-        ack.accepted_frame_count,
-        batch.frames.len(),
-        batch.batch_id,
-        ack.diagnostics.len()
-    )
+fn ack_rejection_diagnostics(ack: &IngestAck, batch: &IngestBatch) -> Vec<Diagnostic> {
+    if ack.diagnostics.is_empty() {
+        return vec![Diagnostic {
+            path: "ingestAck".to_string(),
+            message: format!(
+                "center accepted {}/{} frames for batch {}",
+                ack.accepted_frame_count,
+                batch.frames.len(),
+                batch.batch_id
+            ),
+        }];
+    }
+
+    ack.diagnostics.clone()
 }
 
-impl LaneRuntime {
-    fn new(lane: LaneConfig) -> Result<Self, AgentError> {
-        Ok(Self {
-            lane,
-            history: ServiceHistoryStore::default(),
-        })
+impl<R> LaneRuntime<R>
+where
+    R: ScriptRunner,
+{
+    fn new(lane: LaneConfig, runner: Arc<R>) -> Result<Self, AgentError> {
+        let engine = LaneEngine::new(
+            lane.clone(),
+            ServiceHistoryStore::default(),
+            ServiceStageRunner { runner },
+        )
+        .map_err(map_engine_error)?;
+
+        Ok(Self { lane, engine })
     }
 }
 
@@ -278,11 +290,11 @@ impl HistoryStore for ServiceHistoryStore {
     }
 }
 
-struct ServiceStageRunner<'a, R> {
-    runner: &'a R,
+struct ServiceStageRunner<R> {
+    runner: Arc<R>,
 }
 
-impl<R> StageRunner for ServiceStageRunner<'_, R>
+impl<R> StageRunner for ServiceStageRunner<R>
 where
     R: ScriptRunner,
 {
@@ -323,6 +335,7 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
         lane_id: lane.lane_id.clone(),
         command: string_setting(settings, "command", &lane.lane_id)?,
         cwd: path_setting(settings, "cwd", &lane.lane_id)?.into(),
+        input: None,
         timeout: Duration::seconds(timeout_setting(settings, &lane.lane_id)?),
         capture_stdout: bool_setting(settings, "captureStdout", true, &lane.lane_id)?,
         capture_stderr: bool_setting(settings, "captureStderr", true, &lane.lane_id)?,
@@ -331,8 +344,7 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
 }
 
 fn run_lane_pipeline<R>(
-    lane: &mut LaneRuntime,
-    script_runner: &R,
+    lane: &mut LaneRuntime<R>,
     output: ScriptRunOutput,
     now: DateTime<Utc>,
 ) -> Result<Vec<EngineEffect>, AgentError>
@@ -340,21 +352,16 @@ where
     R: ScriptRunner,
 {
     let mut effects = Vec::new();
-    let stage_runner = ServiceStageRunner {
-        runner: script_runner,
-    };
-    let mut engine = LaneEngine::new(lane.lane.clone(), lane.history.clone(), stage_runner)
-        .map_err(map_engine_error)?;
 
     for record in output.records {
         effects.extend(
-            engine
+            lane.engine
                 .ingest_raw_record(record, now)
                 .map_err(map_engine_error)?,
         );
     }
 
-    effects.extend(engine.tick(now).map_err(map_engine_error)?);
+    effects.extend(lane.engine.tick(now).map_err(map_engine_error)?);
     Ok(effects)
 }
 
@@ -392,6 +399,10 @@ fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequ
         cwd: path_setting(settings, "cwd", lane_id)
             .map_err(|error| EngineError::Runner(error.to_string()))?
             .into(),
+        input: Some(
+            serde_json::to_value(invocation)
+                .map_err(|error| EngineError::Runner(error.to_string()))?,
+        ),
         timeout: Duration::seconds(
             timeout_setting(settings, lane_id)
                 .map_err(|error| EngineError::Runner(error.to_string()))?,

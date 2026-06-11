@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use lanedeck_protocol::{Diagnostic, FrameRecord, IngestBatch, LaneConfig};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -137,6 +137,8 @@ pub struct ScriptRunRequest {
     pub lane_id: String,
     pub command: String,
     pub cwd: WorkingDirectory,
+    #[serde(default)]
+    pub input: Option<Value>,
     #[serde(rename = "timeoutSeconds", with = "duration_seconds")]
     pub timeout: Duration,
     pub capture_stdout: bool,
@@ -178,9 +180,10 @@ pub struct FlushReport {
     pub uploaded_batch_count: usize,
     pub acked_entry_count: usize,
     pub retry_entry_count: usize,
+    pub rejected_entry_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",
@@ -203,6 +206,56 @@ pub enum ControlMessage {
     Unknown {
         message_type: String,
     },
+}
+
+impl<'de> Deserialize<'de> for ControlMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| de::Error::custom("control message must be an object"))?;
+        let message_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+
+        match message_type.as_str() {
+            "reload_lane_config" => Ok(Self::ReloadLaneConfig {
+                config: take_control_field(object, "config")?,
+            }),
+            "build_content" => Ok(Self::BuildContent {
+                content_id: take_control_field(object, "contentId")?,
+                cwd: take_control_field(object, "cwd")?,
+                command: take_control_field(object, "command")?,
+            }),
+            "apply_local_change" => Ok(Self::ApplyLocalChange {
+                path: take_control_field(object, "path")?,
+                body: object.remove("body").unwrap_or(Value::Null),
+            }),
+            "heartbeat" => Ok(Self::Heartbeat),
+            other => Ok(Self::Unknown {
+                message_type: other.to_string(),
+            }),
+        }
+    }
+}
+
+fn take_control_field<T, E>(
+    object: &mut serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: de::Error,
+{
+    let value = object
+        .remove(key)
+        .ok_or_else(|| E::custom(format!("missing control message field {key}")))?;
+    serde_json::from_value(value).map_err(E::custom)
 }
 
 impl ControlMessage {
