@@ -32,6 +32,8 @@ pub struct AgentService<C, P, R> {
 
 struct LaneRuntime<R> {
     lane: LaneConfig,
+    schedule_interval: Duration,
+    next_run_at: Option<DateTime<Utc>>,
     engine: LaneEngine<ServiceHistoryStore, ServiceStageRunner<R>>,
 }
 
@@ -58,9 +60,14 @@ where
         let mut lanes = Vec::with_capacity(config.lanes.len());
 
         for lane in config.lanes {
+            let schedule_interval = Duration::seconds(lane.schedule.interval_seconds as i64);
             let lane_config = lane.config;
             validate_script_raw_stage(&lane_config)?;
-            lanes.push(LaneRuntime::new(lane_config, runner.clone())?);
+            lanes.push(LaneRuntime::new(
+                lane_config,
+                schedule_interval,
+                runner.clone(),
+            )?);
         }
 
         Ok(Self {
@@ -79,15 +86,47 @@ where
         let mut report = AgentRunReport::default();
 
         for lane_index in 0..self.lanes.len() {
-            let request = collect_source_request(&self.lanes[lane_index].lane)?;
-            let output = self.runner.run_script(request)?;
-            report.diagnostics.extend(output.diagnostics.clone());
+            if !self.lanes[lane_index].is_due(now) {
+                continue;
+            }
             report.lane_execution_count += 1;
+
+            let request = match collect_source_request(&self.lanes[lane_index].lane) {
+                Ok(request) => request,
+                Err(error) => {
+                    report
+                        .diagnostics
+                        .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                    self.lanes[lane_index].mark_run(now);
+                    continue;
+                }
+            };
+            let output = match self.runner.run_script(request) {
+                Ok(output) => output,
+                Err(error) => {
+                    report
+                        .diagnostics
+                        .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                    self.lanes[lane_index].mark_run(now);
+                    continue;
+                }
+            };
+            report.diagnostics.extend(output.diagnostics.clone());
 
             let effects = {
                 let lane = &mut self.lanes[lane_index];
-                run_lane_pipeline(lane, output, now)?
+                match run_lane_pipeline(lane, output, now) {
+                    Ok(effects) => effects,
+                    Err(error) => {
+                        report
+                            .diagnostics
+                            .push(lane_error_diagnostic(&lane.lane, error));
+                        lane.mark_run(now);
+                        continue;
+                    }
+                }
             };
+            self.lanes[lane_index].mark_run(now);
             let (frames, diagnostics) = split_effects(effects);
             report.diagnostics.extend(diagnostics);
             report.produced_frame_count += frames.len();
@@ -196,7 +235,7 @@ where
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
         validate_script_raw_stage(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
-        let runtime = LaneRuntime::new(lane_config, self.runner.clone())?;
+        let runtime = LaneRuntime::new(lane_config, Duration::seconds(60), self.runner.clone())?;
 
         if let Some(existing) = self
             .lanes
@@ -246,11 +285,22 @@ fn ack_rejection_diagnostics(ack: &IngestAck, batch: &IngestBatch) -> Vec<Diagno
     ack.diagnostics.clone()
 }
 
+fn lane_error_diagnostic(lane: &LaneConfig, error: AgentError) -> Diagnostic {
+    Diagnostic {
+        path: format!("lanes.{}", lane.lane_id),
+        message: error.to_string(),
+    }
+}
+
 impl<R> LaneRuntime<R>
 where
     R: ScriptRunner,
 {
-    fn new(lane: LaneConfig, runner: Arc<R>) -> Result<Self, AgentError> {
+    fn new(
+        lane: LaneConfig,
+        schedule_interval: Duration,
+        runner: Arc<R>,
+    ) -> Result<Self, AgentError> {
         let engine = LaneEngine::new(
             lane.clone(),
             ServiceHistoryStore::default(),
@@ -258,7 +308,21 @@ where
         )
         .map_err(map_engine_error)?;
 
-        Ok(Self { lane, engine })
+        Ok(Self {
+            lane,
+            schedule_interval,
+            next_run_at: None,
+            engine,
+        })
+    }
+
+    fn is_due(&self, now: DateTime<Utc>) -> bool {
+        self.next_run_at
+            .is_none_or(|next_run_at| now >= next_run_at)
+    }
+
+    fn mark_run(&mut self, now: DateTime<Utc>) {
+        self.next_run_at = Some(now + self.schedule_interval);
     }
 }
 

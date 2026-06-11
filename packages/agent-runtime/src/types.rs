@@ -234,7 +234,7 @@ impl<'de> Deserialize<'de> for ControlMessage {
             }),
             "apply_local_change" => Ok(Self::ApplyLocalChange {
                 path: take_control_field(object, "path")?,
-                body: object.remove("body").unwrap_or(Value::Null),
+                body: take_control_field(object, "body")?,
             }),
             "heartbeat" => Ok(Self::Heartbeat),
             other => Ok(Self::Unknown {

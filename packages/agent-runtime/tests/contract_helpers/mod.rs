@@ -42,6 +42,40 @@ pub fn two_record_frame_agent_config() -> AgentConfig {
     agent_config_with_lane(lane)
 }
 
+pub fn two_lane_agent_config() -> AgentConfig {
+    let cpu = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    let mem = script_lane_config("lane.mem", "/var/lib/lanedeck/sources/mem", 5);
+    from_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.local",
+        "spool": {
+            "path": ":memory:"
+        },
+        "flush": {
+            "maxBatchSize": 16
+        },
+        "control": {
+            "url": "wss://center.local/agent/control"
+        },
+        "lanes": [
+            {
+                "laneId": "lane.cpu",
+                "schedule": {
+                    "intervalSeconds": 60
+                },
+                "config": cpu
+            },
+            {
+                "laneId": "lane.mem",
+                "schedule": {
+                    "intervalSeconds": 60
+                },
+                "config": mem
+            }
+        ]
+    }))
+}
+
 pub fn empty_metric_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.metric_stage.mode = from_json(json!("empty"));
@@ -352,11 +386,15 @@ pub struct ScriptRunnerProbe {
 #[derive(Clone, Default)]
 struct ScriptRunnerProbeState {
     requests: Vec<ScriptRunRequest>,
-    outputs: VecDeque<ScriptRunOutput>,
+    outputs: VecDeque<Result<ScriptRunOutput, String>>,
 }
 
 impl ScriptRunnerProbe {
     pub fn with_outputs(outputs: Vec<ScriptRunOutput>) -> Self {
+        Self::with_results(outputs.into_iter().map(Ok).collect())
+    }
+
+    pub fn with_results(outputs: Vec<Result<ScriptRunOutput, String>>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ScriptRunnerProbeState {
                 requests: Vec::new(),
@@ -374,10 +412,11 @@ impl ScriptRunner for ScriptRunnerProbe {
     fn run_script(&self, request: ScriptRunRequest) -> Result<ScriptRunOutput, AgentError> {
         let mut inner = self.inner.lock().unwrap();
         inner.requests.push(request);
-        Ok(inner
+        inner
             .outputs
             .pop_front()
-            .unwrap_or_else(|| ScriptRunOutput::from_json_records(Vec::new())))
+            .unwrap_or_else(|| Ok(ScriptRunOutput::from_json_records(Vec::new())))
+            .map_err(AgentError::script)
     }
 }
 

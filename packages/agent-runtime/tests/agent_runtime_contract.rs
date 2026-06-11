@@ -9,7 +9,8 @@ use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, content_root, diagnostic_script_output, duration,
     empty_metric_agent_config, ingest_batch, instant, pending_spool_entry,
     reloaded_script_lane_config, script_lane_agent_config, script_output_with_record,
-    scripted_metric_agent_config, successful_script_output, two_record_frame_agent_config,
+    scripted_metric_agent_config, successful_script_output, two_lane_agent_config,
+    two_record_frame_agent_config,
 };
 
 #[tokio::test]
@@ -186,6 +187,16 @@ fn unknown_control_message_tags_decode_to_unknown_variant() {
     assert_eq!(message, ControlMessage::unknown("future_command"));
 }
 
+#[test]
+fn malformed_apply_local_change_requires_body() {
+    let result = serde_json::from_value::<ControlMessage>(json!({
+        "type": "apply_local_change",
+        "path": "/var/lib/lanedeck/content/pages/dashboard.json"
+    }));
+
+    assert!(result.is_err());
+}
+
 #[tokio::test]
 async fn apply_local_change_control_message_calls_local_content_write_handler() {
     let center = CenterProbe::accepting();
@@ -282,7 +293,7 @@ async fn scripted_downstream_stage_runs_through_script_runner() {
 #[tokio::test]
 async fn lane_collection_state_survives_between_runs() {
     let first = instant(1_700_016_500);
-    let second = instant(1_700_016_501);
+    let second = instant(1_700_016_560);
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::default();
     let runner = ScriptRunnerProbe::with_outputs(vec![
@@ -313,6 +324,58 @@ async fn lane_collection_state_survives_between_runs() {
     assert_eq!(raw_frame.record_count, 2);
     assert_eq!(raw_frame.records[0].id, "raw:first");
     assert_eq!(raw_frame.records[1].id, "raw:second");
+}
+
+#[tokio::test]
+async fn lane_schedule_skips_until_interval_elapsed() {
+    let first = instant(1_700_016_600);
+    let early = instant(1_700_016_630);
+    let due = instant(1_700_016_660);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        successful_script_output(first),
+        successful_script_output(due),
+    ]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let first_report = service.run_once(first).await.unwrap();
+    let early_report = service.run_once(early).await.unwrap();
+    let due_report = service.run_once(due).await.unwrap();
+
+    assert_eq!(first_report.lane_execution_count, 1);
+    assert_eq!(early_report.lane_execution_count, 0);
+    assert_eq!(due_report.lane_execution_count, 1);
+    assert_eq!(runner.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn lane_failure_is_reported_and_later_lanes_continue() {
+    let now = instant(1_700_016_700);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_results(vec![
+        Err("cpu source failed".to_string()),
+        Ok(successful_script_output(now)),
+    ]);
+    let mut service = AgentService::new(
+        two_lane_agent_config(),
+        center,
+        spool.clone(),
+        runner.clone(),
+    )
+    .unwrap();
+
+    let report = service.run_once(now).await.unwrap();
+
+    assert_eq!(report.lane_execution_count, 2);
+    assert_eq!(report.enqueued_batch_count, 1);
+    assert_eq!(spool.enqueued_batches().len(), 1);
+    assert_eq!(runner.requests().len(), 2);
+    assert_eq!(report.diagnostics.len(), 1);
+    assert_eq!(report.diagnostics[0].path, "lanes.lane.cpu");
+    assert!(report.diagnostics[0].message.contains("cpu source failed"));
 }
 
 #[tokio::test]
