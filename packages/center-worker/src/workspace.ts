@@ -12,6 +12,7 @@ import type {
 import { badRequest } from "./errors";
 import { LiveHub } from "./live";
 import { contentRevisionToJson } from "./storage/d1";
+import { normalizeObjectPath } from "./storage/r2";
 
 import type { CenterStorage, ContentObjectStore } from "./storage/types";
 
@@ -21,6 +22,18 @@ export interface WorkspaceServiceOptions {
   live: LiveHub;
   clock?: () => string;
   idGenerator?: () => string;
+}
+
+interface PatchContentPayload {
+  sourcePath: string;
+  contentPath: string;
+  source: string;
+  metadata: JsonObject;
+}
+
+interface PatchLaneConfigPayload {
+  laneId: string;
+  settings: JsonObject;
 }
 
 export class WorkspaceService {
@@ -75,16 +88,20 @@ export class WorkspaceService {
 
   async mutate(request: MutationRequest): Promise<MutationResult> {
     const mutationId = this.idGenerator();
-    await this.options.storage.saveMutation(request, mutationId);
 
     if (request.mutation === "patch_content") {
-      return await this.patchContent(request, mutationId);
+      const payload = readPatchContentPayload(request.payload);
+      await this.options.storage.saveMutation(request, mutationId);
+      return await this.patchContent(request, mutationId, payload);
     }
 
     if (request.mutation === "patch_lane_config") {
-      return await this.patchLaneConfig(request, mutationId);
+      const payload = readPatchLaneConfigPayload(request.payload);
+      await this.options.storage.saveMutation(request, mutationId);
+      return await this.patchLaneConfig(request, mutationId, payload);
     }
 
+    await this.options.storage.saveMutation(request, mutationId);
     return await this.requestLocalBuild(request, mutationId);
   }
 
@@ -100,32 +117,28 @@ export class WorkspaceService {
   private async patchContent(
     request: MutationRequest,
     mutationId: string,
+    payload: PatchContentPayload,
   ): Promise<MutationResult> {
-    const sourcePath = requiredString(request.payload, "path");
-    const source = requiredString(request.payload, "source");
-    const contentPath =
-      optionalString(request.payload, "contentPath") ?? sourcePath;
-    const metadata = optionalJsonObject(request.payload, "metadata") ?? {};
     const contentRevision = this.idGenerator();
     const createdAt = this.clock();
     const objectKeys = await this.options.contentStore.writeContentSource({
       workspaceId: request.workspaceId,
       revision: contentRevision,
-      sourcePath,
-      contentPath,
-      source,
+      sourcePath: payload.sourcePath,
+      contentPath: payload.contentPath,
+      source: payload.source,
     });
 
     await this.options.storage.saveContentRevision({
       workspaceId: request.workspaceId,
       mutationId,
       revision: contentRevision,
-      sourcePath,
-      contentPath,
+      sourcePath: payload.sourcePath,
+      contentPath: payload.contentPath,
       sourceKey: objectKeys.sourceKey,
       assetKey: objectKeys.assetKey,
       createdAt,
-      metadata,
+      metadata: payload.metadata,
     });
 
     this.options.live.broadcastToBrowsers({
@@ -146,23 +159,22 @@ export class WorkspaceService {
   private async patchLaneConfig(
     request: MutationRequest,
     mutationId: string,
+    payload: PatchLaneConfigPayload,
   ): Promise<MutationResult> {
-    const laneId = requiredString(request.payload, "laneId");
-    const settings = requiredJsonObject(request.payload, "settings");
     const laneRevision = this.idGenerator();
     await this.options.storage.saveLaneRevision({
       workspaceId: request.workspaceId,
       mutationId,
-      laneId,
+      laneId: payload.laneId,
       revision: laneRevision,
-      settings,
+      settings: payload.settings,
       createdAt: this.clock(),
     });
     this.options.live.broadcastToBrowsers({
       type: "lane_settings_changed",
       workspaceId: request.workspaceId,
       mutationId,
-      laneId,
+      laneId: payload.laneId,
       laneRevision,
     });
     return {
@@ -192,6 +204,32 @@ export class WorkspaceService {
       diagnostics: [],
     };
   }
+}
+
+function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
+  const sourcePath = normalizeObjectPath(
+    requiredString(payload, "path"),
+    "payload.path",
+  );
+  const contentPath = normalizeObjectPath(
+    optionalString(payload, "contentPath") ?? sourcePath,
+    "payload.contentPath",
+  );
+  return {
+    sourcePath,
+    contentPath,
+    source: requiredString(payload, "source"),
+    metadata: optionalJsonObject(payload, "metadata") ?? {},
+  };
+}
+
+function readPatchLaneConfigPayload(
+  payload: JsonObject,
+): PatchLaneConfigPayload {
+  return {
+    laneId: requiredString(payload, "laneId"),
+    settings: requiredJsonObject(payload, "settings"),
+  };
 }
 
 function requiredString(payload: JsonObject, key: string): string {

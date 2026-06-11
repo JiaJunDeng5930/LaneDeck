@@ -83,3 +83,17 @@ export class LiveHub {
     return delivered;
   }
 }
+
+export function restoreLiveSockets(
+  live: LiveHub,
+  agents: Iterable<LiveSocket>,
+  browsers: Iterable<LiveSocket>,
+): void {
+  for (const socket of agents) {
+    live.addAgent(socket);
+  }
+
+  for (const socket of browsers) {
+    live.addBrowser(socket);
+  }
+}

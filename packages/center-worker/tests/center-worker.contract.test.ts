@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { LiveHub, type LiveSocket } from "../src/live";
+import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
 import { handleRequest } from "../src/router";
 import type {
   CenterStorage,
@@ -150,6 +150,43 @@ describe("center-worker contract", () => {
     ]);
   });
 
+  it("invalid content mutation payload returns diagnostics without mutation log writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest("/api/ai/mutation", {
+        workspaceId: "workspace.local",
+        mutation: "patch_content",
+        payload: {
+          source: "<h1>missing path</h1>",
+        },
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_mutation_payload",
+      diagnostics: [expect.objectContaining({ path: "payload.path" })],
+    });
+    expect(harness.storage.mutations).toHaveLength(0);
+  });
+
+  it("unsupported API GET returns JSON diagnostics", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      new Request("https://center.local/api/query", { method: "GET" }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toBe(
+      "application/json; charset=utf-8",
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      error: "route_not_found",
+    });
+  });
+
   it("browser WSS receives content_changed after content mutation", async () => {
     const harness = createHarness();
     const browser = new RecordingSocket();
@@ -192,6 +229,34 @@ describe("center-worker contract", () => {
       buildRequestId: "id-2",
       payload: { reason: "content_changed" },
     });
+  });
+
+  it("restores hibernated sockets into the live hub", () => {
+    const live = new LiveHub();
+    const browser = new RecordingSocket();
+    const agent = new RecordingSocket();
+
+    restoreLiveSockets(live, [agent], [browser]);
+    live.broadcastToBrowsers({
+      type: "ingest_committed",
+      workspaceId: "workspace.local",
+      batchId: "batch-1",
+      acceptedFrameCount: 1,
+    });
+    live.sendToAgents({
+      type: "build_content",
+      workspaceId: "workspace.local",
+      mutationId: "mutation-1",
+      buildRequestId: "build-1",
+      payload: {},
+    });
+
+    expect(browser.decodedMessages()).toContainEqual(
+      expect.objectContaining({ type: "ingest_committed" }),
+    );
+    expect(agent.decodedMessages()).toContainEqual(
+      expect.objectContaining({ type: "build_content" }),
+    );
   });
 });
 

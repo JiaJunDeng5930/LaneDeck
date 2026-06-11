@@ -9,7 +9,7 @@ import type {
 } from "@lanedeck/protocol";
 
 import { ApiError, errorResponse } from "./errors";
-import { LiveHub } from "./live";
+import { LiveHub, restoreLiveSockets } from "./live";
 import { handleRequest } from "./router";
 import { D1CenterStorage } from "./storage/d1";
 import { R2ContentStore } from "./storage/r2";
@@ -21,6 +21,11 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    restoreLiveSockets(
+      this.live,
+      ctx.getWebSockets("agent"),
+      ctx.getWebSockets("browser"),
+    );
     this.service = new WorkspaceService({
       storage: new D1CenterStorage(env.LANEDECK_DB),
       contentStore: new R2ContentStore(env.LANEDECK_BUCKET),
