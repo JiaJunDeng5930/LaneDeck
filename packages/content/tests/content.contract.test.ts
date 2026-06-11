@@ -79,7 +79,7 @@ describe("content package contract", () => {
     app.dispose();
   });
 
-  it("uses the shell-provided center endpoint for initial dashboard render", async () => {
+  it("uses the shell-provided center query URL for initial dashboard render", async () => {
     const document = new TestDocument();
     vi.stubGlobal("document", document as unknown as Document);
     const fetch = vi.fn(
@@ -92,7 +92,7 @@ describe("content package contract", () => {
     const shell = new FakeShell({
       hostState: {
         pickerEnabled: false,
-        centerQueryEndpoint: "https://center.example.test/",
+        centerQueryUrl: "https://center.example.test/api/query",
         route: { view: "dashboard", workspaceId: "workspace.local" },
       },
     });
@@ -134,6 +134,30 @@ describe("content package contract", () => {
       type: "pick_result",
       payload: { pickId: "content/source/dashboard.tsx:55" },
     });
+
+    registration.unregister();
+    app.dispose();
+  });
+
+  it("clears highlighted pick state when picker mode is disabled", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: true },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const target = new TestPickElement();
+
+    await app.init();
+    const registration = registerPickTarget({
+      pickId: "content/source/dashboard.tsx:66",
+      element: target as unknown as HTMLElement,
+    });
+    target.dispatch("pointerenter");
+    shell.updateHostState({ pickerEnabled: false });
+
+    expect(target.getAttribute("data-pick-state")).toBe("registered");
 
     registration.unregister();
     app.dispose();

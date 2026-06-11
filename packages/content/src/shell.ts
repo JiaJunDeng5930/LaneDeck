@@ -10,7 +10,7 @@ import type { ContentRoute } from "./query";
 export interface ShellHostState {
   pickerEnabled: boolean;
   workspaceId?: string;
-  centerQueryEndpoint?: string;
+  centerQueryUrl?: string;
   contentRevision?: string;
   route?: ContentRoute;
 }
@@ -186,16 +186,16 @@ export function parseContentRoute(input: unknown): ContentRoute | undefined {
 
 function parseHostState(input: unknown): ShellHostState {
   const state = recordAt({ state: input }, "state");
-  const pickerEnabled = state.pickerEnabled === true;
+  const pickerEnabled = booleanAt(state, "pickerEnabled");
   const workspaceId = optionalStringAt(state, "workspaceId");
-  const centerQueryEndpoint = optionalStringAt(state, "centerQueryEndpoint");
+  const centerQueryUrl = optionalStringAt(state, "centerQueryUrl");
   const contentRevision = optionalStringAt(state, "contentRevision");
   const route = parseContentRoute(state.route);
 
   return {
     pickerEnabled,
     ...(workspaceId === undefined ? {} : { workspaceId }),
-    ...(centerQueryEndpoint === undefined ? {} : { centerQueryEndpoint }),
+    ...(centerQueryUrl === undefined ? {} : { centerQueryUrl }),
     ...(contentRevision === undefined ? {} : { contentRevision }),
     ...(route === undefined ? {} : { route }),
   };
@@ -230,6 +230,15 @@ function stringAt(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string") {
     throw new ContentError(`${key} must be a string`);
+  }
+
+  return value;
+}
+
+function booleanAt(input: Record<string, unknown>, key: string): boolean {
+  const value = input[key];
+  if (typeof value !== "boolean") {
+    throw new ContentError(`${key} must be a boolean`);
   }
 
   return value;

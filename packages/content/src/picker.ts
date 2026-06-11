@@ -11,13 +11,20 @@ export interface PickRegistration {
 type PickListener = (target: PickTarget) => void;
 
 const pickListeners = new Set<PickListener>();
+const registeredElements = new Set<HTMLElement>();
 let pickerListening = false;
 
 export function setPickerListening(enabled: boolean): void {
   pickerListening = enabled;
+  if (!enabled) {
+    for (const element of registeredElements) {
+      element.setAttribute("data-pick-state", "registered");
+    }
+  }
 }
 
 export function registerPickTarget(target: PickTarget): PickRegistration {
+  registeredElements.add(target.element);
   target.element.setAttribute("data-pick-id", target.pickId);
 
   const enter = () => {
@@ -27,9 +34,6 @@ export function registerPickTarget(target: PickTarget): PickRegistration {
     target.element.setAttribute("data-pick-state", "highlighted");
   };
   const leave = () => {
-    if (!pickerListening) {
-      return;
-    }
     target.element.setAttribute("data-pick-state", "registered");
   };
   const click = (event: Event) => {
@@ -54,6 +58,7 @@ export function registerPickTarget(target: PickTarget): PickRegistration {
       target.element.removeEventListener("pointerenter", enter);
       target.element.removeEventListener("pointerleave", leave);
       target.element.removeEventListener("click", click);
+      registeredElements.delete(target.element);
       target.element.removeAttribute("data-pick-state");
       target.element.removeAttribute("data-pick-id");
     },

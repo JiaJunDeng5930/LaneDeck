@@ -12,7 +12,7 @@ describe("center query client", () => {
         }),
     );
     const client = createHttpCenterQueryClient({
-      endpoint: "https://center.example.test/",
+      queryUrl: "https://center.example.test/api/query",
       fetch,
       headers: new Headers([["authorization", "Bearer token"]]),
     });
@@ -51,7 +51,7 @@ describe("center query client", () => {
 
   it("rejects invalid center query responses", async () => {
     const client = createHttpCenterQueryClient({
-      endpoint: "https://center.example.test",
+      queryUrl: "https://center.example.test/api/query",
       fetch: async () => Response.json({ rows: "bad", diagnostics: [] }),
     });
 
@@ -64,7 +64,7 @@ describe("center query client", () => {
     ).rejects.toBeInstanceOf(ContentError);
   });
 
-  it("requires the shell-provided center endpoint before querying", async () => {
+  it("requires the shell-provided center query URL before querying", async () => {
     const client = createHttpCenterQueryClient({
       fetch: async () => Response.json({ rows: [], diagnostics: [] }),
     });

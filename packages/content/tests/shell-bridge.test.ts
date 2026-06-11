@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createWindowShellBridge } from "../src/index";
+import {
+  ContentError,
+  createWindowShellBridge,
+  parseShellInitMessage,
+} from "../src/index";
 
 describe("window shell bridge", () => {
   it("accepts init messages only from the configured shell", async () => {
@@ -33,7 +37,7 @@ describe("window shell bridge", () => {
         payload: {
           hostState: {
             pickerEnabled: true,
-            centerQueryEndpoint: "https://center.example.test",
+            centerQueryUrl: "https://center.example.test/api/query",
           },
         },
       },
@@ -44,7 +48,7 @@ describe("window shell bridge", () => {
     await expect(init).resolves.toEqual({
       hostState: {
         pickerEnabled: true,
-        centerQueryEndpoint: "https://center.example.test",
+        centerQueryUrl: "https://center.example.test/api/query",
       },
     });
   });
@@ -74,7 +78,7 @@ describe("window shell bridge", () => {
         payload: {
           hostState: {
             pickerEnabled: true,
-            centerQueryEndpoint: "https://center.example.test",
+            centerQueryUrl: "https://center.example.test/api/query",
           },
         },
       },
@@ -85,7 +89,7 @@ describe("window shell bridge", () => {
     expect(states).toEqual([
       {
         pickerEnabled: true,
-        centerQueryEndpoint: "https://center.example.test",
+        centerQueryUrl: "https://center.example.test/api/query",
       },
     ]);
 
@@ -99,6 +103,15 @@ describe("window shell bridge", () => {
       "https://shell.example",
     );
     expect(states).toHaveLength(1);
+  });
+
+  it("rejects non-boolean picker state", () => {
+    expect(() =>
+      parseShellInitMessage({
+        type: "init",
+        payload: { hostState: { pickerEnabled: "true" } },
+      }),
+    ).toThrow(ContentError);
   });
 });
 

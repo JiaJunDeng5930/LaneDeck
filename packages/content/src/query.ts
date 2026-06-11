@@ -8,11 +8,11 @@ import { ContentError } from "./errors";
 
 export interface CenterQueryClient {
   query(request: QueryRequest): Promise<QueryResponse>;
-  setEndpoint?(endpoint: string): void;
+  setQueryUrl?(queryUrl: string): void;
 }
 
 export interface HttpCenterQueryClientOptions {
-  endpoint?: string;
+  queryUrl?: string;
   fetch?: typeof fetch;
   headers?: HeadersInit;
 }
@@ -21,22 +21,22 @@ export function createHttpCenterQueryClient(
   options: HttpCenterQueryClientOptions = {},
 ): CenterQueryClient {
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  let endpoint = normalizeEndpoint(options.endpoint);
+  let queryUrl = options.queryUrl;
 
   return {
-    setEndpoint(nextEndpoint) {
-      endpoint = normalizeEndpoint(nextEndpoint);
+    setQueryUrl(nextQueryUrl) {
+      queryUrl = nextQueryUrl;
     },
 
     async query(request) {
-      if (endpoint === undefined) {
-        throw new ContentError("center query endpoint is missing");
+      if (queryUrl === undefined) {
+        throw new ContentError("center query URL is missing");
       }
 
       const headers = new Headers(options.headers);
       headers.set("content-type", "application/json");
 
-      const response = await fetchImpl(`${endpoint}/api/query`, {
+      const response = await fetchImpl(queryUrl, {
         method: "POST",
         headers,
         body: JSON.stringify(request),
@@ -51,10 +51,6 @@ export function createHttpCenterQueryClient(
       return parseQueryResponse(await response.json());
     },
   };
-}
-
-function normalizeEndpoint(endpoint: string | undefined): string | undefined {
-  return endpoint?.replace(/\/+$/, "");
 }
 
 export function dashboardQueryRequest(route: ContentRoute): QueryRequest {

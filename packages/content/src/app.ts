@@ -193,8 +193,8 @@ export function createContentApp(deps: ContentDeps): ContentApp {
   function applyHostState(state: ShellHostState): void {
     hostState = state;
     setPickerListening(state.pickerEnabled);
-    if (state.centerQueryEndpoint !== undefined) {
-      deps.query.setEndpoint?.(state.centerQueryEndpoint);
+    if (state.centerQueryUrl !== undefined) {
+      deps.query.setQueryUrl?.(state.centerQueryUrl);
     }
   }
 
