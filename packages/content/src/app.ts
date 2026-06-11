@@ -124,6 +124,9 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     deps.shell.subscribeHostState?.((state) => {
       if (!disposed) {
         app.setHostState(state);
+        if (state.route !== undefined) {
+          void app.render(state.route);
+        }
       }
     });
 

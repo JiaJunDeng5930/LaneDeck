@@ -231,6 +231,42 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("renders routes delivered by host state updates", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const query = new FakeQuery({
+      rows: [{ eventText: "route update render" }],
+      diagnostics: [],
+    });
+    const app = createContentApp({
+      query,
+      shell,
+    });
+
+    await app.init();
+    shell.updateHostState({
+      pickerEnabled: false,
+      route: {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+        laneId: "lane.route-update",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(query.requests).toContainEqual({
+      workspaceId: "workspace.local",
+      query: "dashboard",
+      params: { laneId: "lane.route-update" },
+    });
+    expect(document.root.innerHTML).toContain("route update render");
+    app.dispose();
+  });
+
   it("reports query failure through the shell protocol", async () => {
     const document = new TestDocument();
     vi.stubGlobal("document", document as unknown as Document);
