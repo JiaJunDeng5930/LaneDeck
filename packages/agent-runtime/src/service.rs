@@ -85,7 +85,8 @@ where
         let mut lane_ids = HashSet::with_capacity(config.lanes.len());
 
         for lane in config.lanes {
-            let schedule_interval = Duration::seconds(lane.schedule.interval_seconds as i64);
+            let schedule_interval =
+                lane_schedule_interval(&lane.lane_id, lane.schedule.interval_seconds)?;
             if lane.lane_id != lane.config.lane_id {
                 return Err(AgentError::config(format!(
                     "lane {} wrapper laneId must match config.laneId {}",
@@ -540,11 +541,27 @@ fn validate_optional_script_stage(
     stage_path: &str,
     lane_id: &str,
 ) -> Result<(), AgentError> {
-    if *mode == StageMode::Script {
-        validate_script_settings(settings, stage_path, lane_id)?;
+    match mode {
+        StageMode::Script => validate_script_settings(settings, stage_path, lane_id)?,
+        StageMode::Builtin => {
+            return Err(AgentError::config(format!(
+                "lane {lane_id} {stage_path}.mode builtin is not supported by agent-runtime"
+            )));
+        }
+        StageMode::Passthrough | StageMode::Empty => {}
     }
 
     Ok(())
+}
+
+fn lane_schedule_interval(lane_id: &str, interval_seconds: u64) -> Result<Duration, AgentError> {
+    let seconds = i64::try_from(interval_seconds).map_err(|_| {
+        AgentError::config(format!(
+            "lane {lane_id} schedule.intervalSeconds must fit signed duration seconds"
+        ))
+    })?;
+
+    Ok(Duration::seconds(seconds))
 }
 
 fn validate_script_settings(
