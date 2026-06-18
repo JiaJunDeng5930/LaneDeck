@@ -448,6 +448,41 @@ fn replace_config_rejects_lane_identity_change_and_retains_existing_state() {
 }
 
 #[test]
+fn lowered_count_limit_after_reload_keeps_open_window_limit_until_close() {
+    let opened_at = instant(1_700_009_400);
+    let second_record_at = instant(1_700_009_403);
+    let third_record_at = instant(1_700_009_406);
+    let retry_tick = instant(1_700_009_409);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted_results(vec![
+        Err("metric exploded".to_string()),
+        Ok(stage_result(vec![raw_record("metric:retry", retry_tick)])),
+        Ok(stage_result(vec![raw_record("event:retry", retry_tick)])),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(3, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    engine.replace_config(script_lane_config(1, 60)).unwrap();
+    let second_effects = engine
+        .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+        .unwrap();
+
+    assert!(second_effects.is_empty());
+    assert!(
+        engine
+            .ingest_raw_record(raw_record("r3", third_record_at), third_record_at)
+            .is_err()
+    );
+    let retry_effects = engine.tick(retry_tick).unwrap();
+    let raw_frame = closed_frame(&retry_effects, StageKind::Raw);
+
+    assert_record_ids(raw_frame, &["r1", "r2", "r3"]);
+    assert_trigger(raw_frame, TriggerKind::Count);
+}
+
+#[test]
 fn event_failure_preserves_persisted_raw_and_metric_for_event_retry() {
     let opened_at = instant(1_700_010_000);
     let second_record_at = instant(1_700_010_003);
