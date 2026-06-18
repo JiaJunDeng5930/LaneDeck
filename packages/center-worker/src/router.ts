@@ -44,6 +44,7 @@ async function routeRequest(
   const url = new URL(request.url);
 
   if (request.method === "POST" && url.pathname === "/api/ingest") {
+    requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
     const batch = parseIngestBatch(await readJson(request));
     return jsonResponse(await workspace(env, batch.workspaceId).ingest(batch));
   }
@@ -55,6 +56,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/ai/mutation") {
+    requireBearerToken(request, env.LANEDECK_AI_MUTATION_TOKEN);
     const mutation = parseMutationRequest(await readJson(request));
     validateMutationRequestPayload(mutation);
     return jsonResponse(
@@ -79,6 +81,7 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/agent") {
     ensureWebSocketUpgrade(request);
+    requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -138,6 +141,29 @@ async function readContentAsset(
 
 function workspace(env: CenterWorkerEnv, workspaceId: string) {
   return env.WORKSPACE_COORDINATOR.getByName(workspaceId);
+}
+
+function requireBearerToken(
+  request: Request,
+  expectedToken: string | undefined,
+): void {
+  if (expectedToken === undefined || expectedToken.length === 0) {
+    throw new ApiError(500, "authentication_not_configured", [
+      {
+        path: "authorization",
+        message: "expected configured bearer token",
+      },
+    ]);
+  }
+
+  if (request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+    throw new ApiError(401, "authentication_failed", [
+      {
+        path: "authorization",
+        message: "expected valid bearer token",
+      },
+    ]);
+  }
 }
 
 function requiredWorkspaceId(url: URL): string {
