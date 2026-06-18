@@ -220,6 +220,9 @@ async fn ack_batch_id_mismatch_marks_entry_retry_pending() {
     assert_eq!(pending_entries[0].id, SpoolEntryId::from("spool-4"));
     assert_eq!(pending_entries[0].batch.batch_id, "batch-original");
     assert_eq!(report.retry_entry_count, 1);
+    assert_eq!(report.diagnostics[0].path, "ingestAck");
+    assert!(report.diagnostics[0].message.contains("batch-other"));
+    assert!(report.diagnostics[0].message.contains("batch-original"));
 }
 
 #[tokio::test]
@@ -274,6 +277,8 @@ async fn ack_accepted_count_above_batch_size_marks_entry_retry_pending() {
     assert_eq!(pending_entries.len(), 1);
     assert_eq!(pending_entries[0].batch.batch_id, "batch-overcount");
     assert_eq!(report.retry_entry_count, 1);
+    assert_eq!(report.diagnostics[0].path, "ingestAck");
+    assert!(report.diagnostics[0].message.contains("2/1"));
 }
 
 #[tokio::test]
@@ -319,6 +324,8 @@ async fn network_failure_marks_entries_retry_pending() {
     assert_eq!(spool.retry_ids(), vec![SpoolEntryId::from("spool-2")]);
     assert_eq!(spool.pending_entries().len(), 1);
     assert_eq!(report.retry_entry_count, 1);
+    assert_eq!(report.diagnostics[0].path, "ingestAck");
+    assert!(report.diagnostics[0].message.contains("center unreachable"));
 }
 
 #[tokio::test]
@@ -577,6 +584,48 @@ async fn reload_lane_config_rejects_unknown_lane_and_keeps_existing_schedule() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].lane_id, "lane.cpu");
     assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+}
+
+#[tokio::test]
+async fn reload_unknown_lane_checks_active_resource_before_payload_shape() {
+    let now = instant(1_700_013_850);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+    let mut bad_lane = unknown_script_lane_config();
+    bad_lane.raw_stage.settings["timeoutSeconds"] = json!(0);
+
+    let first_error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-unknown-invalid",
+            bad_lane.clone(),
+        ))
+        .await
+        .unwrap_err();
+    let replay_error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-unknown-invalid",
+            bad_lane,
+        ))
+        .await
+        .unwrap_err();
+    service.run_once(now).await.unwrap();
+
+    match first_error {
+        AgentError::Config(message) => {
+            assert!(message.contains("lane.unknown"));
+            assert!(message.contains("not active"));
+            assert!(!message.contains("timeoutSeconds"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        replay_error,
+        AgentError::config("lane lane.unknown is not active")
+    );
+    assert_eq!(runner.requests().len(), 1);
 }
 
 #[tokio::test]
