@@ -360,10 +360,18 @@ where
             }
             ControlMessage::BuildContent {
                 message_id,
+                machine_id,
                 content_id,
+                content_revision: _content_revision,
                 cwd,
                 command,
             } => {
+                if machine_id != self.machine_id {
+                    return Err(AgentError::config(format!(
+                        "build_content machineId {machine_id} does not match local machineId {}",
+                        self.machine_id
+                    )));
+                }
                 let request = ScriptRunRequest {
                     purpose: ScriptPurpose::BuildContent,
                     lane_id: content_id,

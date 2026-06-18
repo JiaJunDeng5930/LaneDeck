@@ -222,7 +222,9 @@ pub enum ControlMessage {
     },
     BuildContent {
         message_id: ControlMessageId,
+        machine_id: String,
         content_id: String,
+        content_revision: String,
         cwd: PathBuf,
         command: String,
     },
@@ -263,7 +265,9 @@ impl<'de> Deserialize<'de> for ControlMessage {
             }),
             "build_content" => Ok(Self::BuildContent {
                 message_id,
+                machine_id: take_control_field(object, "machineId")?,
                 content_id: take_control_field(object, "contentId")?,
+                content_revision: take_control_field(object, "contentRevision")?,
                 cwd: take_control_field(object, "cwd")?,
                 command: take_control_field(object, "command")?,
             }),
@@ -305,13 +309,17 @@ impl ControlMessage {
 
     pub fn build_content(
         message_id: impl Into<ControlMessageId>,
+        machine_id: impl Into<String>,
         content_id: impl Into<String>,
+        content_revision: impl Into<String>,
         cwd: PathBuf,
         command: impl Into<String>,
     ) -> Self {
         Self::BuildContent {
             message_id: message_id.into(),
+            machine_id: machine_id.into(),
             content_id: content_id.into(),
+            content_revision: content_revision.into(),
             cwd,
             command: command.into(),
         }

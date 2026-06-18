@@ -1,4 +1,5 @@
 import type {
+  ContentBuildArtifact,
   IngestBatch,
   JsonObject,
   MutationRequest,
@@ -12,7 +13,7 @@ export interface ContentRevisionRecord {
   sourcePath: string;
   contentPath: string;
   sourceKey: string;
-  assetKey: string;
+  assetKey: string | null;
   createdAt: string;
   metadata: JsonObject;
 }
@@ -27,29 +28,76 @@ export interface LaneRevisionRecord {
   createdAt: string;
 }
 
+export interface ContentBuildRequestRecord {
+  workspaceId: string;
+  buildRequestId: string;
+  mutationId: string;
+  machineId: string;
+  contentId: string;
+  contentRevision: string;
+  cwd: string;
+  command: string;
+  createdAt: string;
+}
+
 export interface ContentObjectWrite {
   workspaceId: string;
   revision: string;
   sourcePath: string;
-  contentPath: string;
   source: string;
 }
 
-export interface ContentObjectKeys {
+export interface ContentSourceObjectKeys {
   sourceKey: string;
+}
+
+export interface ContentBuildArtifactWrite {
+  revision: string;
+  entrypoint: string;
+  artifacts: ContentBuildArtifact[];
+}
+
+export interface ContentBuildObjectKeys {
+  entrypointKey: string;
+  assetKeys: string[];
+}
+
+export interface ContentRevisionPromotion {
+  workspaceId: string;
+  revision: string;
+  contentPath: string;
   assetKey: string;
+  promotedAt: string;
+}
+
+export interface ContentRevisionPromotionResult {
+  record: ContentRevisionRecord;
+  isCurrent: boolean;
 }
 
 export interface ContentObjectStore {
-  writeContentSource(write: ContentObjectWrite): Promise<ContentObjectKeys>;
+  writeContentSource(
+    write: ContentObjectWrite,
+  ): Promise<ContentSourceObjectKeys>;
+  writeContentBuildArtifacts(
+    write: ContentBuildArtifactWrite,
+  ): Promise<ContentBuildObjectKeys>;
 }
 
 export interface CenterStorage {
   initialize(): Promise<void>;
   saveIngestBatch(batch: IngestBatch, ingestedAt: string): Promise<void>;
   getCurrentState(workspaceId: string): Promise<JsonObject>;
-  saveContentRevision(record: ContentRevisionRecord): Promise<boolean>;
+  saveContentSourceRevision(record: ContentRevisionRecord): Promise<void>;
+  promoteContentRevision(
+    promotion: ContentRevisionPromotion,
+  ): Promise<ContentRevisionPromotionResult>;
   getCurrentContent(workspaceId: string): Promise<ContentRevisionRecord | null>;
+  saveContentBuildRequest(record: ContentBuildRequestRecord): Promise<void>;
+  getContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<ContentBuildRequestRecord | null>;
   saveLaneRevision(record: LaneRevisionRecord): Promise<boolean>;
   listCurrentLaneRevisions(workspaceId: string): Promise<LaneRevisionRecord[]>;
   saveMutation(request: MutationRequest, mutationId: string): Promise<number>;

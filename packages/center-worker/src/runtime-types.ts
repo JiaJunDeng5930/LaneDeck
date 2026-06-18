@@ -1,4 +1,5 @@
 import type {
+  ContentBuildCompleteRequest,
   IngestAck,
   IngestBatch,
   MutationRequest,
@@ -11,6 +12,7 @@ export interface WorkspaceCoordinatorRpc {
   ingest(batch: IngestBatch): Promise<IngestAck>;
   query(request: QueryRequest): Promise<QueryResponse>;
   mutate(request: MutationRequest): Promise<MutationResult>;
+  buildComplete(request: ContentBuildCompleteRequest): Promise<MutationResult>;
   connectAgent(request: Request): Promise<Response>;
   connectBrowser(request: Request): Promise<Response>;
   fetch(request: Request): Promise<Response>;

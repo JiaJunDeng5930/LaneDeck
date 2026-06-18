@@ -1,34 +1,67 @@
 import { badRequest } from "../errors";
 
-import type { ContentObjectKeys, ContentObjectWrite } from "./types";
+import type {
+  ContentBuildArtifactWrite,
+  ContentBuildObjectKeys,
+  ContentObjectWrite,
+  ContentSourceObjectKeys,
+} from "./types";
 
 export class R2ContentStore {
   constructor(private readonly bucket: R2Bucket) {}
 
   async writeContentSource(
     write: ContentObjectWrite,
-  ): Promise<ContentObjectKeys> {
+  ): Promise<ContentSourceObjectKeys> {
     const sourcePath = normalizeObjectPath(write.sourcePath, "payload.path");
-    const contentPath = normalizeObjectPath(
-      write.contentPath,
-      "payload.contentPath",
-    );
     const sourceKey = [
       "content-source",
       write.workspaceId,
       write.revision,
       sourcePath,
     ].join("/");
-    const assetKey = ["content", write.revision, contentPath].join("/");
 
     await this.bucket.put(sourceKey, write.source, {
       httpMetadata: { contentType: "text/plain; charset=utf-8" },
     });
-    await this.bucket.put(assetKey, write.source, {
-      httpMetadata: { contentType: contentTypeFor(contentPath) },
-    });
 
-    return { sourceKey, assetKey };
+    return { sourceKey };
+  }
+
+  async writeContentBuildArtifacts(
+    write: ContentBuildArtifactWrite,
+  ): Promise<ContentBuildObjectKeys> {
+    const revision = normalizeObjectPath(write.revision, "contentRevision");
+    const entrypoint = normalizeObjectPath(write.entrypoint, "entrypoint");
+    const assetKeys: string[] = [];
+    let entrypointKey: string | null = null;
+
+    for (const [index, artifact] of write.artifacts.entries()) {
+      const path = normalizeObjectPath(
+        artifact.path,
+        `artifacts.${index}.path`,
+      );
+      const key = ["content", revision, path].join("/");
+      await this.bucket.put(key, artifact.body, {
+        httpMetadata: {
+          contentType: artifact.contentType ?? contentTypeFor(path),
+        },
+      });
+      assetKeys.push(key);
+      if (path === entrypoint) {
+        entrypointKey = key;
+      }
+    }
+
+    if (entrypointKey === null) {
+      throw badRequest(
+        "invalid_content_build_payload",
+        "entrypoint",
+        "expected entrypoint artifact",
+      );
+    }
+
+    return { entrypointKey, assetKeys };
   }
 
   async readContentAsset(

@@ -6,6 +6,7 @@ import type {
   MutationResult,
   QueryRequest,
   QueryResponse,
+  ContentBuildCompleteRequest,
 } from "@lanedeck/protocol";
 
 import { ApiError, errorResponse } from "./errors";
@@ -46,6 +47,12 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
   async mutate(request: MutationRequest): Promise<MutationResult> {
     return await this.service.mutate(request);
+  }
+
+  async buildComplete(
+    request: ContentBuildCompleteRequest,
+  ): Promise<MutationResult> {
+    return await this.service.buildComplete(request);
   }
 
   async connectAgent(request: Request): Promise<Response> {
@@ -100,10 +107,15 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    this.ctx.acceptWebSocket(server, [kind]);
+    const machineId = kind === "agent" ? this.machineIdForRequest(request) : "";
+    server.serializeAttachment({ kind, machineId });
+    this.ctx.acceptWebSocket(
+      server,
+      kind === "agent" ? [kind, `machine:${machineId}`] : [kind],
+    );
 
     if (kind === "agent") {
-      this.live.addAgent(server);
+      this.live.addAgent(server, machineId);
       await this.service.replayCurrentLaneConfigs(
         this.workspaceIdForRequest(request),
         server,
@@ -121,6 +133,17 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       this.ctx.id.name ??
       "workspace"
     );
+  }
+
+  private machineIdForRequest(request: Request): string {
+    const machineId = new URL(request.url).searchParams.get("machineId");
+    if (machineId !== null && machineId.length > 0) {
+      return machineId;
+    }
+
+    throw new ApiError(400, "missing_machine_id", [
+      { path: "machineId", message: "expected machineId query parameter" },
+    ]);
   }
 }
 

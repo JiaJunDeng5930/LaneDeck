@@ -9,7 +9,10 @@ import type {
 
 import type {
   CenterStorage,
+  ContentBuildRequestRecord,
   ContentRevisionRecord,
+  ContentRevisionPromotion,
+  ContentRevisionPromotionResult,
   LaneRevisionRecord,
 } from "./types";
 
@@ -50,12 +53,25 @@ interface LaneRevisionRow {
   created_at: string;
 }
 
+interface ContentBuildRequestRow {
+  workspace_id: string;
+  build_request_id: string;
+  mutation_id: string;
+  machine_id: string;
+  content_id: string;
+  content_revision: string;
+  cwd: string;
+  command: string;
+  created_at: string;
+}
+
 const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS ingest_batches (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, frame_count INTEGER NOT NULL, ingested_at TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id))",
   "CREATE TABLE IF NOT EXISTS frames (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL, closed_at_epoch_ms INTEGER NOT NULL, trigger_kind TEXT NOT NULL, record_count INTEGER NOT NULL, summary_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no))",
   "CREATE TABLE IF NOT EXISTS frame_records (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, record_id TEXT NOT NULL, observed_at TEXT NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no, record_id))",
   "CREATE TABLE IF NOT EXISTS mutation_log (mutation_sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (workspace_id, mutation_id))",
   "CREATE TABLE IF NOT EXISTS content_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, revision TEXT NOT NULL, source_path TEXT NOT NULL, content_path TEXT NOT NULL, source_key TEXT NOT NULL, asset_key TEXT NOT NULL, created_at TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY (workspace_id, revision))",
+  "CREATE TABLE IF NOT EXISTS content_build_requests (workspace_id TEXT NOT NULL, build_request_id TEXT NOT NULL, mutation_id TEXT NOT NULL, machine_id TEXT NOT NULL, content_id TEXT NOT NULL, content_revision TEXT NOT NULL, cwd TEXT NOT NULL, command TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, build_request_id))",
   "CREATE TABLE IF NOT EXISTS lane_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, lane_id TEXT NOT NULL, revision TEXT NOT NULL, settings_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, lane_id, revision))",
   "CREATE TABLE IF NOT EXISTS workspace_pointers (workspace_id TEXT NOT NULL, pointer_key TEXT NOT NULL, pointer_value TEXT NOT NULL, pointer_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (workspace_id, pointer_key))",
 ];
@@ -146,11 +162,12 @@ export class D1CenterStorage implements CenterStorage {
     };
   }
 
-  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
-    await this.db.batch([
-      this.db
-        .prepare(
-          `INSERT INTO content_revisions (
+  async saveContentSourceRevision(
+    record: ContentRevisionRecord,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO content_revisions (
             workspace_id,
             mutation_id,
             mutation_sequence,
@@ -162,32 +179,65 @@ export class D1CenterStorage implements CenterStorage {
             created_at,
             metadata_json
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        record.workspaceId,
+        record.mutationId,
+        record.mutationSequence,
+        record.revision,
+        record.sourcePath,
+        record.contentPath,
+        record.sourceKey,
+        record.assetKey ?? "",
+        record.createdAt,
+        JSON.stringify(record.metadata),
+      )
+      .run();
+  }
+
+  async promoteContentRevision(
+    promotion: ContentRevisionPromotion,
+  ): Promise<ContentRevisionPromotionResult> {
+    const existing = await this.getContentRevision(
+      promotion.workspaceId,
+      promotion.revision,
+    );
+    if (existing === null) {
+      throw new Error("content revision was not found");
+    }
+
+    const promotedRecord: ContentRevisionRecord = {
+      ...existing,
+      contentPath: promotion.contentPath,
+      assetKey: promotion.assetKey,
+    };
+
+    await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE content_revisions
+          SET content_path = ?, asset_key = ?
+          WHERE workspace_id = ? AND revision = ?`,
         )
         .bind(
-          record.workspaceId,
-          record.mutationId,
-          record.mutationSequence,
-          record.revision,
-          record.sourcePath,
-          record.contentPath,
-          record.sourceKey,
-          record.assetKey,
-          record.createdAt,
-          JSON.stringify(record.metadata),
+          promotion.contentPath,
+          promotion.assetKey,
+          promotion.workspaceId,
+          promotion.revision,
         ),
       this.upsertPointer(
-        record.workspaceId,
+        promotion.workspaceId,
         "current_content_revision",
-        record.revision,
-        record.mutationSequence,
-        record.createdAt,
+        promotion.revision,
+        existing.mutationSequence,
+        promotion.promotedAt,
       ),
     ]);
     return await this.pointerMatches(
-      record.workspaceId,
+      promotion.workspaceId,
       "current_content_revision",
-      record.revision,
-    );
+      promotion.revision,
+    ).then((isCurrent) => ({ record: promotedRecord, isCurrent }));
   }
 
   async getCurrentContent(
@@ -206,6 +256,69 @@ export class D1CenterStorage implements CenterStorage {
       return null;
     }
 
+    return await this.getContentRevision(workspaceId, revision);
+  }
+
+  async saveContentBuildRequest(
+    record: ContentBuildRequestRecord,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO content_build_requests (
+          workspace_id,
+          build_request_id,
+          mutation_id,
+          machine_id,
+          content_id,
+          content_revision,
+          cwd,
+          command,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        record.workspaceId,
+        record.buildRequestId,
+        record.mutationId,
+        record.machineId,
+        record.contentId,
+        record.contentRevision,
+        record.cwd,
+        record.command,
+        record.createdAt,
+      )
+      .run();
+  }
+
+  async getContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<ContentBuildRequestRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT
+          workspace_id,
+          build_request_id,
+          mutation_id,
+          machine_id,
+          content_id,
+          content_revision,
+          cwd,
+          command,
+          created_at
+        FROM content_build_requests
+        WHERE workspace_id = ? AND build_request_id = ?`,
+      )
+      .bind(workspaceId, buildRequestId)
+      .first<ContentBuildRequestRow>();
+
+    return row === null ? null : contentBuildRequestFromRow(row);
+  }
+
+  private async getContentRevision(
+    workspaceId: string,
+    revision: string,
+  ): Promise<ContentRevisionRecord | null> {
     const row = await this.db
       .prepare(
         `SELECT
@@ -463,7 +576,7 @@ function contentRevisionFromRow(
     sourcePath: row.source_path,
     contentPath: row.content_path,
     sourceKey: row.source_key,
-    assetKey: row.asset_key,
+    assetKey: row.asset_key.length === 0 ? null : row.asset_key,
     createdAt: row.created_at,
     metadata: parseJsonObject(row.metadata_json),
   };
@@ -477,6 +590,22 @@ function laneRevisionFromRow(row: LaneRevisionRow): LaneRevisionRecord {
     laneId: row.lane_id,
     revision: row.revision,
     settings: parseJsonObject(row.settings_json),
+    createdAt: row.created_at,
+  };
+}
+
+function contentBuildRequestFromRow(
+  row: ContentBuildRequestRow,
+): ContentBuildRequestRecord {
+  return {
+    workspaceId: row.workspace_id,
+    buildRequestId: row.build_request_id,
+    mutationId: row.mutation_id,
+    machineId: row.machine_id,
+    contentId: row.content_id,
+    contentRevision: row.content_revision,
+    cwd: row.cwd,
+    command: row.command,
     createdAt: row.created_at,
   };
 }

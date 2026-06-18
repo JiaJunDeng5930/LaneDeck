@@ -33,10 +33,12 @@ export type BrowserLiveMessage =
 
 export class LiveHub {
   private readonly agents = new Set<LiveSocket>();
+  private readonly agentMachines = new Map<LiveSocket, string>();
   private readonly browsers = new Set<LiveSocket>();
 
-  addAgent(socket: LiveSocket): void {
+  addAgent(socket: LiveSocket, machineId = "machine.local"): void {
     this.agents.add(socket);
+    this.agentMachines.set(socket, machineId);
   }
 
   addBrowser(socket: LiveSocket): void {
@@ -45,6 +47,7 @@ export class LiveHub {
 
   remove(socket: LiveSocket): void {
     this.agents.delete(socket);
+    this.agentMachines.delete(socket);
     this.browsers.delete(socket);
   }
 
@@ -56,9 +59,12 @@ export class LiveHub {
     return this.sendTo(this.agents, message);
   }
 
-  sendToOneAgent(message: AgentControlMessage): number {
+  sendToMachineAgent(machineId: string, message: AgentControlMessage): number {
     const encoded = JSON.stringify(message);
     for (const socket of this.agents) {
+      if (this.agentMachines.get(socket) !== machineId) {
+        continue;
+      }
       if (this.sendOne(socket, encoded) === 1) {
         return 1;
       }
@@ -101,10 +107,28 @@ export function restoreLiveSockets(
   browsers: Iterable<LiveSocket>,
 ): void {
   for (const socket of agents) {
-    live.addAgent(socket);
+    live.addAgent(socket, machineIdFromSocket(socket));
   }
 
   for (const socket of browsers) {
     live.addBrowser(socket);
   }
+}
+
+function machineIdFromSocket(socket: LiveSocket): string {
+  const maybeSocket = socket as LiveSocket & {
+    deserializeAttachment?: () => unknown;
+  };
+  const attachment = maybeSocket.deserializeAttachment?.();
+  if (
+    typeof attachment === "object" &&
+    attachment !== null &&
+    "machineId" in attachment &&
+    typeof attachment.machineId === "string" &&
+    attachment.machineId.length > 0
+  ) {
+    return attachment.machineId;
+  }
+
+  return "machine.local";
 }

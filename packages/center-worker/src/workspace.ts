@@ -1,5 +1,6 @@
 import { parseLaneConfig } from "@lanedeck/protocol";
 import type {
+  ContentBuildCompleteRequest,
   Diagnostic,
   IngestAck,
   IngestBatch,
@@ -39,7 +40,9 @@ interface PatchLaneConfigPayload {
 }
 
 interface LocalBuildPayload {
+  machineId: string;
   contentId: string;
+  contentRevision: string;
   cwd: string;
   command: string;
 }
@@ -128,7 +131,52 @@ export class WorkspaceService {
 
     const payload = readLocalBuildPayload(request.payload);
     await this.options.storage.saveMutation(request, mutationId);
-    return await this.requestLocalBuild(mutationId, payload);
+    return await this.requestLocalBuild(
+      request.workspaceId,
+      mutationId,
+      payload,
+    );
+  }
+
+  async buildComplete(
+    request: ContentBuildCompleteRequest,
+  ): Promise<MutationResult> {
+    const buildRequest = await this.options.storage.getContentBuildRequest(
+      request.workspaceId,
+      request.buildRequestId,
+    );
+    validateBuildCompletionIdentity(request, buildRequest);
+
+    const objectKeys =
+      await this.options.contentStore.writeContentBuildArtifacts({
+        revision: request.contentRevision,
+        entrypoint: request.entrypoint,
+        artifacts: request.artifacts,
+      });
+    const { record, isCurrent } =
+      await this.options.storage.promoteContentRevision({
+        workspaceId: request.workspaceId,
+        revision: request.contentRevision,
+        contentPath: request.entrypoint,
+        assetKey: objectKeys.entrypointKey,
+        promotedAt: this.clock(),
+      });
+
+    if (isCurrent) {
+      this.options.live.broadcastToBrowsers({
+        type: "content_changed",
+        workspaceId: request.workspaceId,
+        mutationId: record.mutationId,
+        contentRevision: record.revision,
+      });
+    }
+
+    return {
+      mutation: "patch_content",
+      mutationId: record.mutationId,
+      contentRevision: record.revision,
+      diagnostics: supersededDiagnostics(isCurrent, "currentContent"),
+    };
   }
 
   async alarm(workspaceId: string): Promise<void> {
@@ -171,11 +219,10 @@ export class WorkspaceService {
       workspaceId: request.workspaceId,
       revision: contentRevision,
       sourcePath: payload.sourcePath,
-      contentPath: payload.contentPath,
       source: payload.source,
     });
 
-    const isCurrent = await this.options.storage.saveContentRevision({
+    await this.options.storage.saveContentSourceRevision({
       workspaceId: request.workspaceId,
       mutationId,
       mutationSequence,
@@ -183,25 +230,16 @@ export class WorkspaceService {
       sourcePath: payload.sourcePath,
       contentPath: payload.contentPath,
       sourceKey: objectKeys.sourceKey,
-      assetKey: objectKeys.assetKey,
+      assetKey: null,
       createdAt,
       metadata: payload.metadata,
     });
-
-    if (isCurrent) {
-      this.options.live.broadcastToBrowsers({
-        type: "content_changed",
-        workspaceId: request.workspaceId,
-        mutationId,
-        contentRevision,
-      });
-    }
 
     return {
       mutation: "patch_content",
       mutationId,
       contentRevision,
-      diagnostics: supersededDiagnostics(isCurrent, "currentContent"),
+      diagnostics: [],
     };
   }
 
@@ -251,14 +289,28 @@ export class WorkspaceService {
   }
 
   private async requestLocalBuild(
+    workspaceId: string,
     mutationId: string,
     payload: LocalBuildPayload,
   ): Promise<MutationResult> {
     const buildRequestId = this.idGenerator();
-    const delivered = this.options.live.sendToOneAgent({
+    await this.options.storage.saveContentBuildRequest({
+      workspaceId,
+      buildRequestId,
+      mutationId,
+      machineId: payload.machineId,
+      contentId: payload.contentId,
+      contentRevision: payload.contentRevision,
+      cwd: payload.cwd,
+      command: payload.command,
+      createdAt: this.clock(),
+    });
+    const delivered = this.options.live.sendToMachineAgent(payload.machineId, {
       type: "build_content",
       messageId: buildRequestId,
+      machineId: payload.machineId,
       contentId: payload.contentId,
+      contentRevision: payload.contentRevision,
       cwd: payload.cwd,
       command: payload.command,
     });
@@ -360,10 +412,44 @@ function readPatchLaneConfigPayload(
 
 function readLocalBuildPayload(payload: JsonObject): LocalBuildPayload {
   return {
+    machineId: requiredString(payload, "machineId"),
     contentId: requiredString(payload, "contentId"),
+    contentRevision: requiredString(payload, "contentRevision"),
     cwd: requiredString(payload, "cwd"),
     command: requiredString(payload, "command"),
   };
+}
+
+function validateBuildCompletionIdentity(
+  request: ContentBuildCompleteRequest,
+  buildRequest: {
+    machineId: string;
+    contentRevision: string;
+  } | null,
+): void {
+  if (buildRequest === null) {
+    throw badRequest(
+      "invalid_content_build_completion",
+      "buildRequestId",
+      "expected existing content build request",
+    );
+  }
+
+  if (buildRequest.machineId !== request.machineId) {
+    throw badRequest(
+      "invalid_content_build_completion",
+      "machineId",
+      "expected build request machine id",
+    );
+  }
+
+  if (buildRequest.contentRevision !== request.contentRevision) {
+    throw badRequest(
+      "invalid_content_build_completion",
+      "contentRevision",
+      "expected build request content revision",
+    );
+  }
 }
 
 function deliveryDiagnostics(

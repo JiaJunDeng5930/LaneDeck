@@ -1,5 +1,6 @@
 import {
   ProtocolError,
+  parseContentBuildCompleteRequest,
   parseIngestBatch,
   parseMutationRequest,
   parseQueryRequest,
@@ -67,6 +68,19 @@ async function routeRequest(
     );
   }
 
+  if (
+    request.method === "POST" &&
+    url.pathname === "/api/content/build-complete"
+  ) {
+    await requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
+    const completion = parseContentBuildCompleteRequest(
+      await readJson(request),
+    );
+    return jsonResponse(
+      await workspace(env, completion.workspaceId).buildComplete(completion),
+    );
+  }
+
   if (request.method === "GET" && url.pathname === "/api/content/current") {
     await requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     const workspaceId = requiredWorkspaceId(url);
@@ -86,6 +100,7 @@ async function routeRequest(
   if (request.method === "GET" && url.pathname === "/ws/agent") {
     ensureWebSocketUpgrade(request);
     await requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
+    requiredMachineId(url);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -296,6 +311,19 @@ function requiredWorkspaceId(url: URL): string {
     "missing_workspace_id",
     "workspaceId",
     "expected workspaceId query parameter",
+  );
+}
+
+function requiredMachineId(url: URL): string {
+  const machineId = url.searchParams.get("machineId");
+  if (machineId !== null && machineId.length > 0) {
+    return machineId;
+  }
+
+  throw badRequest(
+    "missing_machine_id",
+    "machineId",
+    "expected machineId query parameter",
   );
 }
 
