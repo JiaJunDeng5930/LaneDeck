@@ -156,6 +156,21 @@ pub fn downstream_script_stage_missing_setting_cases()
     ]
 }
 
+pub fn downstream_builtin_stage_cases() -> Vec<(&'static str, LaneConfig, &'static str)> {
+    vec![
+        (
+            "metric stage builtin mode",
+            downstream_builtin_stage("metricStage"),
+            "metricStage",
+        ),
+        (
+            "event stage builtin mode",
+            downstream_builtin_stage("eventStage"),
+            "eventStage",
+        ),
+    ]
+}
+
 pub fn two_record_frame_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.raw_stage.settings["frame"]["maxRecords"] = json!(2);
@@ -282,6 +297,18 @@ fn downstream_script_stage_missing_setting(
             lane.event_stage.mode = from_json(json!("script"));
             lane.event_stage.settings = settings;
         }
+        _ => unreachable!("known downstream stage path"),
+    }
+
+    lane
+}
+
+fn downstream_builtin_stage(stage_path: &'static str) -> LaneConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+
+    match stage_path {
+        "metricStage" => lane.metric_stage.mode = from_json(json!("builtin")),
+        "eventStage" => lane.event_stage.mode = from_json(json!("builtin")),
         _ => unreachable!("known downstream stage path"),
     }
 

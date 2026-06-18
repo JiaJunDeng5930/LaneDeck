@@ -8,11 +8,12 @@ use serde_json::json;
 
 use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, agent_config_with_lane_config, content_root,
-    diagnostic_script_output, downstream_script_stage_missing_setting_cases,
-    duplicate_nested_lane_identity_agent_config, duration, empty_metric_agent_config, ingest_batch,
-    instant, mismatched_lane_identity_agent_config, pending_spool_entry,
-    reloaded_script_lane_config, script_lane_agent_config, script_lane_agent_config_with_interval,
-    script_output_with_record, script_output_with_records, scripted_metric_agent_config,
+    diagnostic_script_output, downstream_builtin_stage_cases,
+    downstream_script_stage_missing_setting_cases, duplicate_nested_lane_identity_agent_config,
+    duration, empty_metric_agent_config, ingest_batch, instant,
+    mismatched_lane_identity_agent_config, pending_spool_entry, reloaded_script_lane_config,
+    script_lane_agent_config, script_lane_agent_config_with_interval, script_output_with_record,
+    script_output_with_records, scripted_metric_agent_config,
     scripted_metric_agent_config_with_upstream_history_limit, successful_script_output,
     two_lane_agent_config, two_record_frame_agent_config, unknown_script_lane_config,
 };
@@ -445,6 +446,40 @@ fn startup_rejects_duplicate_lane_identities() {
     assert!(mismatch_message.contains("lane.wrapper"));
     assert!(mismatch_message.contains("lane.cpu"));
     assert!(mismatch_message.contains("laneId"));
+}
+
+#[test]
+fn startup_rejects_schedule_interval_seconds_above_signed_duration_limit() {
+    let mut config = script_lane_agent_config();
+    let schedule: lanedeck_agent_runtime::LaneSchedule = lanedeck_agent_runtime::LaneSchedule {
+        interval_seconds: i64::MAX as u64 + 1,
+    };
+    config.lanes[0].schedule = schedule;
+
+    let message = new_service_config_message(config);
+
+    assert!(message.contains("lane.cpu"));
+    assert!(message.contains("schedule.intervalSeconds"));
+}
+
+#[test]
+fn crate_root_exports_public_field_types_for_config_and_spool_api() {
+    let schedule: lanedeck_agent_runtime::LaneSchedule = lanedeck_agent_runtime::LaneSchedule {
+        interval_seconds: 15,
+    };
+    let mut config = script_lane_agent_config();
+    config.lanes[0].schedule = schedule;
+    let entry = pending_spool_entry(
+        "spool-public",
+        ingest_batch("batch-public", instant(1_700_014_100)),
+    );
+    let state: lanedeck_agent_runtime::SpoolEntryState = entry.state;
+
+    assert_eq!(config.lanes[0].schedule.interval_seconds, 15);
+    match state {
+        lanedeck_agent_runtime::SpoolEntryState::Pending => {}
+        other => panic!("unexpected spool entry state: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -884,6 +919,41 @@ async fn downstream_script_stage_settings_validated_at_update_boundary() {
     }
 }
 
+#[tokio::test]
+async fn downstream_builtin_stages_are_rejected_at_update_boundary() {
+    for (case_name, bad_lane, stage_path) in downstream_builtin_stage_cases() {
+        let new_message =
+            new_service_config_message(agent_config_with_lane_config(bad_lane.clone()));
+        assert_builtin_stage_config_message(&new_message, stage_path, case_name);
+
+        let now = instant(1_700_017_700);
+        let spool = SpoolProbe::default();
+        let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+        let mut service = AgentService::new(
+            script_lane_agent_config(),
+            CenterProbe::accepting(),
+            spool.clone(),
+            runner.clone(),
+        )
+        .unwrap();
+
+        let reload_error = service
+            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .await
+            .unwrap_err();
+        let reload_message = config_message(reload_error);
+        assert_builtin_stage_config_message(&reload_message, stage_path, case_name);
+
+        let report = service.run_once(now).await.unwrap();
+        let requests = runner.requests();
+
+        assert_eq!(report.lane_execution_count, 1, "{case_name}");
+        assert_eq!(requests.len(), 1, "{case_name}");
+        assert_eq!(requests[0].purpose, ScriptPurpose::CollectSource);
+        assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+    }
+}
+
 fn new_service_config_message(config: AgentConfig) -> String {
     let result = AgentService::new(
         config,
@@ -914,6 +984,12 @@ fn assert_downstream_config_message(
     assert!(message.contains("lane.cpu"), "{case_name}: {message}");
     assert!(message.contains(stage_path), "{case_name}: {message}");
     assert!(message.contains(missing_key), "{case_name}: {message}");
+}
+
+fn assert_builtin_stage_config_message(message: &str, stage_path: &str, case_name: &str) {
+    assert!(message.contains("lane.cpu"), "{case_name}: {message}");
+    assert!(message.contains(stage_path), "{case_name}: {message}");
+    assert!(message.contains("builtin"), "{case_name}: {message}");
 }
 
 fn metric_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
