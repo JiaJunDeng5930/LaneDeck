@@ -87,6 +87,7 @@ export function normalizeObjectPath(value: string, path: string): string {
   if (
     trimmed.length === 0 ||
     trimmed.startsWith("/") ||
+    trimmed.includes("\\") ||
     parts.some((part) => part.length === 0 || part === "." || part === "..")
   ) {
     throw badRequest(
