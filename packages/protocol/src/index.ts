@@ -125,6 +125,7 @@ export interface ContentBuildCompleteRequest {
   workspaceId: string;
   machineId: string;
   buildRequestId: string;
+  contentId: string;
   contentRevision: string;
   entrypoint: string;
   artifacts: ContentBuildArtifact[];
@@ -255,6 +256,7 @@ export function parseContentBuildCompleteRequest(
     workspaceId: validator.string(object.workspaceId, "workspaceId"),
     machineId: validator.string(object.machineId, "machineId"),
     buildRequestId: validator.string(object.buildRequestId, "buildRequestId"),
+    contentId: validator.string(object.contentId, "contentId"),
     contentRevision: validator.string(
       object.contentRevision,
       "contentRevision",

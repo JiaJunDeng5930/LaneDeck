@@ -94,6 +94,27 @@ pub struct IngestAck {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentBuildArtifact {
+    pub path: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentBuildCompleteRequest {
+    pub workspace_id: String,
+    pub machine_id: String,
+    pub build_request_id: String,
+    pub content_id: String,
+    pub content_revision: String,
+    pub entrypoint: String,
+    pub artifacts: Vec<ContentBuildArtifact>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageHistory {
