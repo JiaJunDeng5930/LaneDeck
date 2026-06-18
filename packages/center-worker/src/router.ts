@@ -44,20 +44,20 @@ async function routeRequest(
   const url = new URL(request.url);
 
   if (request.method === "POST" && url.pathname === "/api/ingest") {
-    requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
+    await requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
     const batch = parseIngestBatch(await readJson(request));
     return jsonResponse(await workspace(env, batch.workspaceId).ingest(batch));
   }
 
   if (request.method === "POST" && url.pathname === "/api/query") {
-    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
+    await requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     const query = parseQueryRequest(await readJson(request));
     validateQueryRequestName(query);
     return jsonResponse(await workspace(env, query.workspaceId).query(query));
   }
 
   if (request.method === "POST" && url.pathname === "/api/ai/mutation") {
-    requireBearerToken(request, env.LANEDECK_AI_MUTATION_TOKEN);
+    await requireBearerToken(request, env.LANEDECK_AI_MUTATION_TOKEN);
     const mutation = parseMutationRequest(await readJson(request));
     validateMutationRequestPayload(mutation);
     return jsonResponse(
@@ -66,7 +66,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/content/current") {
-    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
+    await requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     const workspaceId = requiredWorkspaceId(url);
     return jsonResponse(
       await workspace(env, workspaceId).query({
@@ -83,13 +83,13 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/agent") {
     ensureWebSocketUpgrade(request);
-    requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
+    await requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
-    requireBrowserReadToken(request, url, env.LANEDECK_READ_TOKEN);
+    await requireBrowserReadToken(request, url, env.LANEDECK_READ_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -146,34 +146,10 @@ function workspace(env: CenterWorkerEnv, workspaceId: string) {
   return env.WORKSPACE_COORDINATOR.getByName(workspaceId);
 }
 
-function requireBearerToken(
+async function requireBearerToken(
   request: Request,
   expectedToken: string | undefined,
-): void {
-  if (expectedToken === undefined || expectedToken.length === 0) {
-    throw new ApiError(500, "authentication_not_configured", [
-      {
-        path: "authorization",
-        message: "expected configured bearer token",
-      },
-    ]);
-  }
-
-  if (request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
-    throw new ApiError(401, "authentication_failed", [
-      {
-        path: "authorization",
-        message: "expected valid bearer token",
-      },
-    ]);
-  }
-}
-
-function requireBrowserReadToken(
-  request: Request,
-  url: URL,
-  expectedToken: string | undefined,
-): void {
+): Promise<void> {
   if (expectedToken === undefined || expectedToken.length === 0) {
     throw new ApiError(500, "authentication_not_configured", [
       {
@@ -184,13 +160,81 @@ function requireBrowserReadToken(
   }
 
   if (
-    request.headers.get("authorization") === `Bearer ${expectedToken}` ||
-    url.searchParams.get("readToken") === expectedToken
+    await secretEquals(
+      request.headers.get("authorization"),
+      `Bearer ${expectedToken}`,
+    )
   ) {
     return;
   }
 
-  throw new ApiError(401, "authentication_failed", [
+  throw authenticationFailed();
+}
+
+async function requireBrowserReadToken(
+  request: Request,
+  url: URL,
+  expectedToken: string | undefined,
+): Promise<void> {
+  if (expectedToken === undefined || expectedToken.length === 0) {
+    throw new ApiError(500, "authentication_not_configured", [
+      {
+        path: "authorization",
+        message: "expected configured bearer token",
+      },
+    ]);
+  }
+
+  const [bearerMatches, queryMatches] = await Promise.all([
+    secretEquals(
+      request.headers.get("authorization"),
+      `Bearer ${expectedToken}`,
+    ),
+    secretEquals(url.searchParams.get("readToken"), expectedToken),
+  ]);
+
+  if (bearerMatches || queryMatches) {
+    return;
+  }
+
+  throw authenticationFailed();
+}
+
+async function secretEquals(
+  candidate: string | null,
+  expected: string,
+): Promise<boolean> {
+  const [candidateDigest, expectedDigest] = await Promise.all([
+    digestSecret(candidate ?? ""),
+    digestSecret(expected),
+  ]);
+  return timingSafeEqual(candidateDigest, expectedDigest);
+}
+
+async function digestSecret(value: string): Promise<Uint8Array> {
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+  );
+}
+
+function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual?: (left: Uint8Array, right: Uint8Array) => boolean;
+  };
+  if (typeof subtle.timingSafeEqual === "function") {
+    return subtle.timingSafeEqual(left, right);
+  }
+
+  let difference = left.byteLength ^ right.byteLength;
+  const length = Math.max(left.byteLength, right.byteLength);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+}
+
+function authenticationFailed(): ApiError {
+  return new ApiError(401, "authentication_failed", [
     {
       path: "authorization",
       message: "expected valid bearer token",
