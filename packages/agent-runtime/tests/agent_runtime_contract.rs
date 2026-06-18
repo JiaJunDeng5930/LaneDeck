@@ -1,8 +1,8 @@
 mod contract_helpers;
 
 use lanedeck_agent_runtime::{
-    AgentConfig, AgentError, AgentService, ControlMessage, ControlReply, ScriptPurpose,
-    ScriptRunOutput, ScriptSideEffectPolicy, SpoolEntryId,
+    AgentConfig, AgentError, AgentService, ControlMessage, ControlMessageRecord, ControlReply,
+    ScriptPurpose, ScriptRunOutput, ScriptSideEffectPolicy, SpoolEntryId,
 };
 use lanedeck_protocol::{LaneConfig, StageMode};
 use serde_json::json;
@@ -339,13 +339,17 @@ async fn reload_lane_config_control_message_refreshes_lane_config() {
 
     let reply = service
         .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-refresh",
             reloaded_script_lane_config(),
         ))
         .await
         .unwrap();
     service.run_once(now).await.unwrap();
 
-    assert_eq!(reply, ControlReply::accepted("reload_lane_config"));
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-reload-refresh", "reload_lane_config")
+    );
     let request = runner.requests().remove(0);
     assert_eq!(request.lane_id, "lane.cpu");
     assert_eq!(request.cwd, "/var/lib/lanedeck/sources/cpu-reloaded");
@@ -374,6 +378,7 @@ async fn reload_lane_config_preserves_existing_schedule_cadence() {
     service.run_once(first).await.unwrap();
     service
         .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-cadence",
             reloaded_script_lane_config(),
         ))
         .await
@@ -411,6 +416,7 @@ async fn reload_lane_config_preserves_frame_sequence() {
     service.run_once(first).await.unwrap();
     service
         .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-sequence",
             reloaded_script_lane_config(),
         ))
         .await
@@ -443,7 +449,10 @@ async fn pending_close_retry_uses_close_time_lane_config_after_reload() {
     let mut reloaded = reloaded_scripted_metric_lane_config();
     reloaded.metric_stage.settings["cwd"] = json!("/var/lib/lanedeck/stages/metric-reloaded");
     service
-        .handle_control_message(ControlMessage::reload_lane_config(reloaded))
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-pending-close",
+            reloaded,
+        ))
         .await
         .unwrap();
     service.run_once(second).await.unwrap();
@@ -469,6 +478,7 @@ async fn reload_lane_config_rejects_unknown_lane_and_keeps_existing_schedule() {
 
     let error = service
         .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-unknown",
             unknown_script_lane_config(),
         ))
         .await
@@ -497,6 +507,7 @@ async fn build_content_control_message_calls_content_build_handler() {
 
     let reply = service
         .handle_control_message(ControlMessage::build_content(
+            "control-build-main",
             "dashboard-main",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
@@ -504,7 +515,10 @@ async fn build_content_control_message_calls_content_build_handler() {
         .await
         .unwrap();
 
-    assert_eq!(reply, ControlReply::accepted("build_content"));
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-build-main", "build_content")
+    );
     let request = runner.requests().remove(0);
     assert_eq!(request.purpose, ScriptPurpose::BuildContent);
     assert_eq!(request.cwd, content_root());
@@ -514,10 +528,141 @@ async fn build_content_control_message_calls_content_build_handler() {
     );
 }
 
+#[tokio::test]
+async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
+    let now = instant(1_700_014_100);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        successful_script_output(now),
+        successful_script_output(now),
+    ]);
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center,
+        spool.clone(),
+        runner.clone(),
+    )
+    .unwrap();
+
+    let first_build = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-duplicate",
+            "dashboard-main",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap();
+    let second_build = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-duplicate",
+            "dashboard-main",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap();
+    let first_apply = service
+        .handle_control_message(ControlMessage::apply_local_change(
+            "control-apply-duplicate",
+            "dashboard.json".into(),
+            json!({"title": "once"}),
+        ))
+        .await
+        .unwrap();
+    let second_apply = service
+        .handle_control_message(ControlMessage::apply_local_change(
+            "control-apply-duplicate",
+            "dashboard.json".into(),
+            json!({"title": "twice"}),
+        ))
+        .await
+        .unwrap();
+
+    let requests = runner.requests();
+    assert_eq!(first_build, second_build);
+    assert_eq!(first_apply, second_apply);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].purpose, ScriptPurpose::BuildContent);
+    assert_eq!(requests[1].purpose, ScriptPurpose::ApplyLocalChange);
+    assert!(requests[1].command.contains("once"));
+    assert_eq!(
+        spool.control_message_record("control-build-duplicate"),
+        Some(ControlMessageRecord::Completed(Ok(first_build)))
+    );
+    assert_eq!(
+        spool.control_message_record("control-apply-duplicate"),
+        Some(ControlMessageRecord::Completed(Ok(first_apply)))
+    );
+}
+
+#[tokio::test]
+async fn duplicate_rejected_control_message_replays_recorded_error() {
+    let now = instant(1_700_014_200);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let first_error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-rejected-duplicate",
+            unknown_script_lane_config(),
+        ))
+        .await
+        .unwrap_err();
+    let second_error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-rejected-duplicate",
+            reloaded_script_lane_config(),
+        ))
+        .await
+        .unwrap_err();
+    let report = service.run_once(now).await.unwrap();
+    let requests = runner.requests();
+
+    assert_eq!(first_error, second_error);
+    assert_eq!(report.lane_execution_count, 1);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].cwd, "/var/lib/lanedeck/sources/cpu");
+}
+
+#[tokio::test]
+async fn in_progress_control_message_blocks_duplicate_side_effect_execution() {
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::with_control_message(
+        "control-build-in-progress",
+        ControlMessageRecord::InProgress,
+    );
+    let runner =
+        ScriptRunnerProbe::with_outputs(vec![successful_script_output(instant(1_700_014_300))]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let error = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-in-progress",
+            "dashboard-main",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap_err();
+
+    match error {
+        AgentError::Spool(message) => assert!(message.contains("already in progress")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(runner.requests().is_empty());
+}
+
 #[test]
 fn control_messages_accept_camel_case_protocol_fields() {
     let message: ControlMessage = serde_json::from_value(json!({
         "type": "build_content",
+        "messageId": "control-build-json",
         "contentId": "dashboard-main",
         "cwd": "/var/lib/lanedeck/content",
         "command": "build-content"
@@ -526,10 +671,12 @@ fn control_messages_accept_camel_case_protocol_fields() {
 
     match message {
         ControlMessage::BuildContent {
+            message_id,
             content_id,
             cwd,
             command,
         } => {
+            assert_eq!(message_id.as_str(), "control-build-json");
             assert_eq!(content_id, "dashboard-main");
             assert_eq!(cwd, content_root());
             assert_eq!(command, "build-content");
@@ -542,18 +689,32 @@ fn control_messages_accept_camel_case_protocol_fields() {
 fn unknown_control_message_tags_decode_to_unknown_variant() {
     let message: ControlMessage = serde_json::from_value(json!({
         "type": "future_command",
+        "messageId": "control-future",
         "contentId": "dashboard-main"
     }))
     .unwrap();
 
-    assert_eq!(message, ControlMessage::unknown("future_command"));
+    assert_eq!(
+        message,
+        ControlMessage::unknown("control-future", "future_command")
+    );
 }
 
 #[test]
 fn malformed_apply_local_change_requires_body() {
     let result = serde_json::from_value::<ControlMessage>(json!({
         "type": "apply_local_change",
+        "messageId": "control-apply-malformed",
         "path": "/var/lib/lanedeck/content/pages/dashboard.json"
+    }));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn malformed_control_message_requires_message_id() {
+    let result = serde_json::from_value::<ControlMessage>(json!({
+        "type": "heartbeat"
     }));
 
     assert!(result.is_err());
@@ -661,13 +822,17 @@ async fn apply_local_change_control_message_calls_local_content_write_handler() 
 
     let reply = service
         .handle_control_message(ControlMessage::apply_local_change(
+            "control-apply-dashboard",
             path.clone(),
             json!({"title": "updated dashboard"}),
         ))
         .await
         .unwrap();
 
-    assert_eq!(reply, ControlReply::accepted("apply_local_change"));
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-apply-dashboard", "apply_local_change")
+    );
     let request = runner.requests().remove(0);
     assert_eq!(request.purpose, ScriptPurpose::ApplyLocalChange);
     assert_eq!(request.cwd, content_root().join("pages"));
@@ -691,13 +856,17 @@ async fn apply_local_change_relative_single_file_uses_dot_cwd() {
 
     let reply = service
         .handle_control_message(ControlMessage::apply_local_change(
+            "control-apply-relative",
             "dashboard.json".into(),
             json!({"title": "local dashboard"}),
         ))
         .await
         .unwrap();
 
-    assert_eq!(reply, ControlReply::accepted("apply_local_change"));
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-apply-relative", "apply_local_change")
+    );
     let request = runner.requests().remove(0);
     assert_eq!(request.purpose, ScriptPurpose::ApplyLocalChange);
     assert_eq!(request.cwd, ".");
@@ -848,6 +1017,7 @@ async fn reload_refreshes_history_retention_limits() {
     let mut reloaded_config = scripted_metric_agent_config_with_upstream_history_limit(2);
     let reload_reply = service
         .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-history-limits",
             reloaded_config.lanes.remove(0).config,
         ))
         .await
@@ -864,7 +1034,10 @@ async fn reload_refreshes_history_retention_limits() {
         .as_array()
         .unwrap();
 
-    assert_eq!(reload_reply, ControlReply::accepted("reload_lane_config"));
+    assert_eq!(
+        reload_reply,
+        ControlReply::accepted("control-reload-history-limits", "reload_lane_config")
+    );
     assert_eq!(metric_inputs.len(), 5);
     assert_eq!(before_reload_history.len(), 1);
     assert_eq!(before_reload_history[0]["records"][0]["id"], "raw:second");
@@ -1285,7 +1458,10 @@ async fn downstream_script_stage_settings_validated_at_update_boundary() {
         .unwrap();
 
         let reload_error = service
-            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .handle_control_message(ControlMessage::reload_lane_config(
+                format!("control-missing-setting-{case_name}"),
+                bad_lane,
+            ))
             .await
             .unwrap_err();
         let reload_message = config_message(reload_error);
@@ -1322,7 +1498,10 @@ async fn script_stage_capture_settings_require_boolean_at_update_boundary() {
         .unwrap();
 
         let reload_error = service
-            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .handle_control_message(ControlMessage::reload_lane_config(
+                format!("control-capture-setting-{case_name}"),
+                bad_lane,
+            ))
             .await
             .unwrap_err();
         let reload_message = config_message(reload_error);
@@ -1358,7 +1537,10 @@ async fn script_stage_timeout_seconds_outside_duration_range_rejected_at_update_
         .unwrap();
 
         let reload_error = service
-            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .handle_control_message(ControlMessage::reload_lane_config(
+                format!("control-duration-{stage_path}"),
+                bad_lane,
+            ))
             .await
             .unwrap_err();
         let reload_message = config_message(reload_error);
@@ -1393,7 +1575,10 @@ async fn downstream_builtin_stages_are_rejected_at_update_boundary() {
         .unwrap();
 
         let reload_error = service
-            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .handle_control_message(ControlMessage::reload_lane_config(
+                format!("control-builtin-{case_name}"),
+                bad_lane,
+            ))
             .await
             .unwrap_err();
         let reload_message = config_message(reload_error);

@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use lanedeck_agent_runtime::{
-    AgentConfig, AgentError, CenterClient, ControlConnectRequest, ControlSession, LocalSpool,
-    RetryReason, ScriptRunOutput, ScriptRunRequest, ScriptRunner, SpoolEntry, SpoolEntryId,
+    AgentConfig, AgentError, CenterClient, ControlConnectRequest, ControlMessageId,
+    ControlMessageRecord, ControlSession, LocalSpool, RetryReason, ScriptRunOutput,
+    ScriptRunRequest, ScriptRunner, SpoolEntry, SpoolEntryId,
 };
 use lanedeck_protocol::{Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig};
 use serde_json::{Value, json};
@@ -606,6 +607,7 @@ struct SpoolProbeState {
     enqueued_batches: Vec<IngestBatch>,
     pending_entries: Vec<SpoolEntry>,
     lane_frame_cursors: HashMap<String, u64>,
+    control_messages: HashMap<ControlMessageId, ControlMessageRecord>,
     acked_ids: Vec<SpoolEntryId>,
     retry_ids: Vec<SpoolEntryId>,
     rejected_ids: Vec<SpoolEntryId>,
@@ -630,6 +632,32 @@ impl SpoolProbe {
                 ..SpoolProbeState::default()
             })),
         }
+    }
+
+    pub fn with_control_message(
+        message_id: impl Into<ControlMessageId>,
+        record: ControlMessageRecord,
+    ) -> Self {
+        let mut control_messages = HashMap::new();
+        control_messages.insert(message_id.into(), record);
+        Self {
+            inner: Arc::new(Mutex::new(SpoolProbeState {
+                control_messages,
+                ..SpoolProbeState::default()
+            })),
+        }
+    }
+
+    pub fn control_message_record(
+        &self,
+        message_id: impl Into<ControlMessageId>,
+    ) -> Option<ControlMessageRecord> {
+        self.inner
+            .lock()
+            .unwrap()
+            .control_messages
+            .get(&message_id.into())
+            .cloned()
     }
 
     pub fn enqueued_batches(&self) -> Vec<IngestBatch> {
@@ -667,6 +695,44 @@ impl LocalSpool for SpoolProbe {
             .get(lane_id)
             .copied()
             .unwrap_or(1))
+    }
+
+    fn load_control_message(
+        &mut self,
+        message_id: &ControlMessageId,
+    ) -> Result<Option<ControlMessageRecord>, AgentError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .control_messages
+            .get(message_id)
+            .cloned())
+    }
+
+    fn mark_control_message_in_progress(
+        &mut self,
+        message_id: ControlMessageId,
+    ) -> Result<(), AgentError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .control_messages
+            .insert(message_id, ControlMessageRecord::InProgress);
+        Ok(())
+    }
+
+    fn mark_control_message_completed(
+        &mut self,
+        message_id: ControlMessageId,
+        result: Result<lanedeck_agent_runtime::ControlReply, AgentError>,
+    ) -> Result<(), AgentError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .control_messages
+            .insert(message_id, ControlMessageRecord::Completed(result));
+        Ok(())
     }
 
     fn enqueue(&mut self, batch: IngestBatch) -> Result<SpoolEntryId, AgentError> {

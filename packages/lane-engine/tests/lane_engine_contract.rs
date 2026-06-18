@@ -417,6 +417,37 @@ fn failed_count_closure_is_retried_as_count_on_later_tick() {
 }
 
 #[test]
+fn replace_config_rejects_lane_identity_change_and_retains_existing_state() {
+    let opened_at = instant(1_700_009_300);
+    let second_record_at = instant(1_700_009_303);
+    let store = StoreProbe::new(empty_history());
+    let runner = RunnerProbe::scripted(vec![
+        stage_result(vec![raw_record("metric:identity", second_record_at)]),
+        stage_result(vec![raw_record("event:identity", second_record_at)]),
+    ]);
+    let mut engine = LaneEngine::new(script_lane_config(2, 60), store, runner).unwrap();
+
+    engine
+        .ingest_raw_record(raw_record("r1", opened_at), opened_at)
+        .unwrap();
+    let mut replacement = script_lane_config(2, 60);
+    replacement.lane_id = "lane.mem".to_string();
+    let error = match engine.replace_config(replacement) {
+        Ok(_) => panic!("expected lane identity rejection"),
+        Err(error) => error,
+    };
+    let effects = engine
+        .ingest_raw_record(raw_record("r2", second_record_at), second_record_at)
+        .unwrap();
+    let raw_frame = closed_frame(&effects, StageKind::Raw);
+
+    assert!(error.to_string().contains("laneId"));
+    assert_eq!(raw_frame.lane_id, "lane.cpu");
+    assert_eq!(raw_frame.frame_no, 1);
+    assert_record_ids(raw_frame, &["r1", "r2"]);
+}
+
+#[test]
 fn event_failure_preserves_persisted_raw_and_metric_for_event_retry() {
     let opened_at = instant(1_700_010_000);
     let second_record_at = instant(1_700_010_003);
