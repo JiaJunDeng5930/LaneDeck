@@ -538,7 +538,7 @@ describe("center-worker contract", () => {
     );
     expect(agent.decodedMessages()).toContainEqual({
       type: "reload_lane_config",
-      messageId: "id-3",
+      messageId: "reload_lane_config:id-2",
       config: validLaneConfig,
     });
   });
@@ -593,6 +593,27 @@ describe("center-worker contract", () => {
       ],
     });
     expect(harness.storage.laneRevisions).toHaveLength(1);
+  });
+
+  it("agent connect replay sends current lane configs with revision-stable control ids", async () => {
+    const harness = createHarness();
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_lane_config",
+      payload: { config: validLaneConfig },
+    });
+
+    const agent = new RecordingSocket();
+    await expect(
+      harness.workspace.replayCurrentLaneConfigs("workspace.local", agent),
+    ).resolves.toBe(1);
+
+    expect(agent.decodedMessages()).toContainEqual({
+      type: "reload_lane_config",
+      messageId: "reload_lane_config:id-2",
+      config: validLaneConfig,
+    });
   });
 
   it("lane config mutation validates current lane schema before mutation log writes", async () => {

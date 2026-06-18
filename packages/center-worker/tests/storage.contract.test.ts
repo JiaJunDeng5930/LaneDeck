@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { D1CenterStorage } from "../src/storage/d1";
 import { R2ContentStore, rewriteViteAssetReferences } from "../src/storage/r2";
 
+import type { IngestBatch } from "@lanedeck/protocol";
 import type {
   ContentRevisionRecord,
   LaneRevisionRecord,
@@ -42,6 +43,50 @@ describe("center-worker storage contract", () => {
     expect(db.pointerValue("workspace.local", "lane_revision:lane.local")).toBe(
       "lane-revision-new",
     );
+  });
+
+  it("lists current lane revisions for agent catch-up", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveLaneRevision(
+      laneRevision("lane-revision-new", 2, "2026-06-10T10:00:02.000Z"),
+    );
+    await storage.saveLaneRevision(
+      laneRevision("lane-revision-old", 1, "2026-06-10T10:00:01.000Z"),
+    );
+
+    await expect(
+      storage.listCurrentLaneRevisions("workspace.local"),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        laneId: "lane.local",
+        revision: "lane-revision-new",
+      }),
+    ]);
+  });
+
+  it("replaces repeated ingest batch scope atomically", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveIngestBatch(
+      ingestBatch([frame(1), frame(2)]),
+      "2026-06-10T10:00:10.000Z",
+    );
+    await storage.saveIngestBatch(
+      ingestBatch([frame(1)]),
+      "2026-06-10T10:00:20.000Z",
+    );
+
+    const state = await storage.getCurrentState("workspace.local");
+
+    expect(state.frames).toEqual([
+      expect.objectContaining({ batchId: "batch-1", frameNo: 1 }),
+    ]);
+    expect(
+      db.recordCountForBatch("workspace.local", "machine.local", "batch-1"),
+    ).toBe(1);
   });
 
   it("rewrites root Vite asset URLs in HTML and CSS text", () => {
@@ -112,6 +157,35 @@ function laneRevision(
   } as LaneRevisionRecord;
 }
 
+function ingestBatch(frames: IngestBatch["frames"]): IngestBatch {
+  return {
+    workspaceId: "workspace.local",
+    machineId: "machine.local",
+    batchId: "batch-1",
+    frames,
+  };
+}
+
+function frame(frameNo: number): IngestBatch["frames"][number] {
+  return {
+    laneId: "lane.local",
+    stage: "event",
+    frameNo,
+    openedAt: `2026-06-10T10:00:0${frameNo}.000Z`,
+    closedAt: `2026-06-10T10:00:1${frameNo}.000Z`,
+    triggerKind: "count",
+    recordCount: 1,
+    records: [
+      {
+        id: `record-${frameNo}`,
+        observedAt: `2026-06-10T10:00:0${frameNo}.500Z`,
+        body: { frameNo },
+      },
+    ],
+    summary: { frameNo },
+  };
+}
+
 interface PointerRow {
   pointerValue: string;
   pointerSequence: number;
@@ -131,8 +205,35 @@ interface ContentRevisionRow {
   metadata_json: string;
 }
 
+interface LaneRevisionRow {
+  workspace_id: string;
+  mutation_id: string;
+  mutation_sequence: number;
+  lane_id: string;
+  revision: string;
+  settings_json: string;
+  created_at: string;
+}
+
+interface FrameRow {
+  workspace_id: string;
+  machine_id: string;
+  batch_id: string;
+  lane_id: string;
+  stage: string;
+  frame_no: number;
+  opened_at: string;
+  closed_at: string;
+  trigger_kind: string;
+  record_count: number;
+  summary_json: string;
+}
+
 class FakeD1Database {
   readonly contentRevisions = new Map<string, ContentRevisionRow>();
+  readonly laneRevisions = new Map<string, LaneRevisionRow>();
+  private readonly frames = new Map<string, FrameRow>();
+  private readonly frameRecords = new Set<string>();
   private readonly pointers = new Map<string, PointerRow>();
 
   prepare(sql: string): FakeD1PreparedStatement {
@@ -153,7 +254,80 @@ class FakeD1Database {
     );
   }
 
+  recordCountForBatch(
+    workspaceId: string,
+    machineId: string,
+    batchId: string,
+  ): number {
+    const prefix = `${workspaceId}:${machineId}:${batchId}:`;
+    return [...this.frameRecords].filter((key) => key.startsWith(prefix))
+      .length;
+  }
+
   run(sql: string, bindings: unknown[]): D1Result {
+    if (sql.includes("DELETE FROM frame_records")) {
+      this.deleteBatchFrameRecords(bindings as string[]);
+    }
+
+    if (sql.includes("DELETE FROM frames")) {
+      this.deleteBatchFrames(bindings as string[]);
+    }
+
+    if (sql.includes("INSERT OR REPLACE INTO frames")) {
+      const [
+        workspaceId,
+        machineId,
+        batchId,
+        laneId,
+        stage,
+        frameNo,
+        openedAt,
+        closedAt,
+        triggerKind,
+        recordCount,
+        summaryJson,
+      ] = bindings as string[];
+      this.frames.set(
+        frameKey(workspaceId, machineId, batchId, laneId, stage, frameNo),
+        {
+          workspace_id: workspaceId,
+          machine_id: machineId,
+          batch_id: batchId,
+          lane_id: laneId,
+          stage,
+          frame_no: Number(frameNo),
+          opened_at: openedAt,
+          closed_at: closedAt,
+          trigger_kind: triggerKind,
+          record_count: Number(recordCount),
+          summary_json: summaryJson,
+        },
+      );
+    }
+
+    if (sql.includes("INSERT OR REPLACE INTO frame_records")) {
+      const [
+        workspaceId,
+        machineId,
+        batchId,
+        laneId,
+        stage,
+        frameNo,
+        recordId,
+      ] = bindings as string[];
+      this.frameRecords.add(
+        frameRecordKey(
+          workspaceId,
+          machineId,
+          batchId,
+          laneId,
+          stage,
+          frameNo,
+          recordId,
+        ),
+      );
+    }
+
     if (sql.includes("INSERT INTO content_revisions")) {
       const hasMutationSequence = sql.includes("mutation_sequence");
       const [workspaceId, mutationId] = bindings as string[];
@@ -176,6 +350,27 @@ class FakeD1Database {
         asset_key: assetKey,
         created_at: createdAt,
         metadata_json: metadataJson,
+      });
+    }
+
+    if (sql.includes("INSERT INTO lane_revisions")) {
+      const [
+        workspaceId,
+        mutationId,
+        mutationSequence,
+        laneId,
+        revision,
+        settingsJson,
+        createdAt,
+      ] = bindings as string[];
+      this.laneRevisions.set(laneKey(workspaceId, laneId, revision), {
+        workspace_id: workspaceId,
+        mutation_id: mutationId,
+        mutation_sequence: Number(mutationSequence),
+        lane_id: laneId,
+        revision,
+        settings_json: settingsJson,
+        created_at: createdAt,
       });
     }
 
@@ -211,6 +406,60 @@ class FakeD1Database {
     }
 
     return null;
+  }
+
+  all<T>(sql: string, bindings: unknown[]): { results: T[] } {
+    if (sql.includes("FROM frames")) {
+      const [workspaceId] = bindings as string[];
+      const results = [...this.frames.values()]
+        .filter((row) => row.workspace_id === workspaceId)
+        .sort((left, right) =>
+          right.closed_at.localeCompare(left.closed_at) ||
+          right.batch_id.localeCompare(left.batch_id) ||
+          left.lane_id.localeCompare(right.lane_id),
+        );
+      return { results: results as T[] };
+    }
+
+    if (
+      sql.includes("FROM workspace_pointers") &&
+      sql.includes("JOIN lane_revisions")
+    ) {
+      const [workspaceId] = bindings as string[];
+      const rows = [...this.pointers.entries()]
+        .filter(([key]) => key.startsWith(`${workspaceId}:lane_revision:`))
+        .map(([key, pointer]) => {
+          const laneId = key.slice(`${workspaceId}:lane_revision:`.length);
+          return this.laneRevisions.get(
+            laneKey(workspaceId, laneId, pointer.pointerValue),
+          );
+        })
+        .filter((row): row is LaneRevisionRow => row !== undefined)
+        .sort((left, right) => left.lane_id.localeCompare(right.lane_id));
+      return { results: rows as T[] };
+    }
+
+    return { results: [] };
+  }
+
+  private deleteBatchFrames(bindings: string[]): void {
+    const [workspaceId, machineId, batchId] = bindings;
+    const prefix = `${workspaceId}:${machineId}:${batchId}:`;
+    for (const key of this.frames.keys()) {
+      if (key.startsWith(prefix)) {
+        this.frames.delete(key);
+      }
+    }
+  }
+
+  private deleteBatchFrameRecords(bindings: string[]): void {
+    const [workspaceId, machineId, batchId] = bindings;
+    const prefix = `${workspaceId}:${machineId}:${batchId}:`;
+    for (const key of this.frameRecords) {
+      if (key.startsWith(prefix)) {
+        this.frameRecords.delete(key);
+      }
+    }
   }
 
   private upsertPointer(sql: string, bindings: unknown[]): void {
@@ -258,6 +507,10 @@ class FakeD1PreparedStatement {
   async first<T = unknown>(column?: string): Promise<T | null> {
     return this.db.first<T>(this.sql, this.bindings, column);
   }
+
+  async all<T = unknown>(): Promise<{ results: T[] }> {
+    return this.db.all<T>(this.sql, this.bindings);
+  }
 }
 
 class FakeR2Bucket {
@@ -290,4 +543,38 @@ function pointerKey(workspaceId: string, key: string): string {
 
 function contentKey(workspaceId: string, revision: string): string {
   return `${workspaceId}:${revision}`;
+}
+
+function laneKey(workspaceId: string, laneId: string, revision: string): string {
+  return `${workspaceId}:${laneId}:${revision}`;
+}
+
+function frameKey(
+  workspaceId: string,
+  machineId: string,
+  batchId: string,
+  laneId: string,
+  stage: string,
+  frameNo: string,
+): string {
+  return `${workspaceId}:${machineId}:${batchId}:${laneId}:${stage}:${frameNo}`;
+}
+
+function frameRecordKey(
+  workspaceId: string,
+  machineId: string,
+  batchId: string,
+  laneId: string,
+  stage: string,
+  frameNo: string,
+  recordId: string,
+): string {
+  return `${frameKey(
+    workspaceId,
+    machineId,
+    batchId,
+    laneId,
+    stage,
+    frameNo,
+  )}:${recordId}`;
 }
