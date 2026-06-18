@@ -197,6 +197,13 @@ where
                     report.uploaded_batch_count += 1;
                     report.acked_entry_count += 1;
                 }
+                Ok(ack) if ack.batch_id != entry.batch.batch_id => {
+                    self.spool.mark_retry(
+                        std::slice::from_ref(&id),
+                        ack_identity_retry_reason(&ack, &entry.batch),
+                    )?;
+                    report.retry_entry_count += 1;
+                }
                 Ok(ack) => {
                     self.spool.mark_rejected(
                         std::slice::from_ref(&id),
@@ -374,6 +381,13 @@ fn ack_rejection_diagnostics(ack: &IngestAck, batch: &IngestBatch) -> Vec<Diagno
     }
 
     ack.diagnostics.clone()
+}
+
+fn ack_identity_retry_reason(ack: &IngestAck, batch: &IngestBatch) -> RetryReason {
+    RetryReason::network(format!(
+        "center ack batch id {} did not match spool batch id {}",
+        ack.batch_id, batch.batch_id
+    ))
 }
 
 fn lane_error_diagnostic(lane: &LaneConfig, error: AgentError) -> Diagnostic {
@@ -555,6 +569,12 @@ fn validate_optional_script_stage(
 }
 
 fn lane_schedule_interval(lane_id: &str, interval_seconds: u64) -> Result<Duration, AgentError> {
+    if interval_seconds == 0 {
+        return Err(AgentError::config(format!(
+            "lane {lane_id} schedule.intervalSeconds must be positive"
+        )));
+    }
+
     let seconds = i64::try_from(interval_seconds).map_err(|_| {
         AgentError::config(format!(
             "lane {lane_id} schedule.intervalSeconds must fit signed duration seconds"
@@ -572,6 +592,8 @@ fn validate_script_settings(
     string_setting(settings, "command", lane_id, stage_path)?;
     path_setting(settings, "cwd", lane_id, stage_path)?;
     timeout_setting(settings, lane_id, stage_path)?;
+    bool_setting(settings, "captureStdout", true, lane_id, stage_path)?;
+    bool_setting(settings, "captureStderr", true, lane_id, stage_path)?;
 
     Ok(())
 }
