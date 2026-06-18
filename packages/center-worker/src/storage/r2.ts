@@ -14,6 +14,7 @@ export class R2ContentStore {
     write: ContentObjectWrite,
   ): Promise<ContentSourceObjectKeys> {
     const sourcePath = normalizeObjectPath(write.sourcePath, "payload.path");
+    validateContentSource(write.source, "payload.source");
     const sourceKey = [
       "content-source",
       write.workspaceId,
@@ -38,7 +39,9 @@ export class R2ContentStore {
       );
     }
 
-    return await object.text();
+    const source = await object.text();
+    validateContentSource(source, "sourceKey");
+    return source;
   }
 
   async writeContentBuildArtifacts(
@@ -145,6 +148,18 @@ function decodeBase64ArtifactBody(value: string, path: string): Uint8Array {
     bytes[index] = decoded.charCodeAt(index);
   }
   return bytes;
+}
+
+function validateContentSource(value: string, path: string): void {
+  if (value.trim().length > 0) {
+    return;
+  }
+
+  throw badRequest(
+    "invalid_content_source",
+    path,
+    "expected non-empty content source",
+  );
 }
 
 export function rewriteViteAssetReferences(

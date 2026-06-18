@@ -143,6 +143,7 @@ export class WorkspaceService {
     const source = await this.options.contentStore.readContentSource(
       sourceRevision.sourceKey,
     );
+    requireNonEmptyContentSource(source, "payload.contentRevision");
     await this.options.storage.saveMutation(request, mutationId);
     return await this.requestLocalBuild(
       request.workspaceId,
@@ -436,7 +437,7 @@ function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
   return {
     sourcePath,
     contentPath,
-    source: requiredString(payload, "source"),
+    source: requiredNonEmptyString(payload, "source"),
     metadata: optionalJsonObject(payload, "metadata") ?? {},
   };
 }
@@ -598,6 +599,18 @@ function requiredNonEmptyString(payload: JsonObject, key: string): string {
     "invalid_mutation_payload",
     `payload.${key}`,
     "expected non-empty string",
+  );
+}
+
+function requireNonEmptyContentSource(source: string, path: string): void {
+  if (source.trim().length > 0) {
+    return;
+  }
+
+  throw badRequest(
+    "invalid_content_source",
+    path,
+    "expected non-empty content source",
   );
 }
 

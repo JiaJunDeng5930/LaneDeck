@@ -406,6 +406,46 @@ describe("center-worker contract", () => {
     expect(harness.storage.mutations).toHaveLength(0);
   });
 
+  it("POST /api/ai/mutation rejects empty content source before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_content",
+          payload: {
+            path: "src/dashboard.tsx",
+            source: "",
+          },
+        },
+        "ai-token",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_mutation_payload",
+      diagnostics: [expect.objectContaining({ path: "payload.source" })],
+    });
+    expect(fetched).toBe(false);
+  });
+
   it("POST /api/ai/mutation rejects backslash object paths before coordinator fetch", async () => {
     let fetched = false;
     const response = await handleRequest(
@@ -1365,6 +1405,41 @@ describe("center-worker contract", () => {
       sourcePath: "index.html",
       source: "<main>source</main>",
     });
+  });
+
+  it("local build mutation rejects empty stored source before side effects", async () => {
+    const harness = createHarness();
+    const agent = new RecordingSocket();
+    harness.live.addAgent(agent, "machine.devbox");
+    seedContentRevision(harness, "workspace.local", "revision-1");
+    harness.objects.writes.set(
+      "content-source/workspace.local/revision-1/index.html",
+      "",
+    );
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "request_local_build",
+        payload: {
+          machineId: "machine.devbox",
+          contentId: "content.home",
+          contentRevision: "revision-1",
+          cwd: "/workspace/content",
+          command: "corepack pnpm --filter @lanedeck/content build",
+        },
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_content_source",
+      diagnostics: [
+        expect.objectContaining({ path: "payload.contentRevision" }),
+      ],
+    });
+
+    expect(harness.storage.mutations).toHaveLength(0);
+    expect(harness.storage.contentBuildRequests).toHaveLength(0);
+    expect(agent.decodedMessages()).toEqual([]);
   });
 
   it("local build mutation reports empty agent delivery", async () => {

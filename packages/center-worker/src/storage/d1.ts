@@ -137,7 +137,7 @@ export class D1CenterStorage implements CenterStorage {
           summary_json
         FROM frames
         WHERE workspace_id = ?
-        ORDER BY closed_at_epoch_ms DESC, batch_id DESC, lane_id ASC
+        ORDER BY closed_at_epoch_ms DESC, batch_id DESC, lane_id ASC, machine_id ASC, stage ASC, frame_no ASC
         LIMIT 100`,
       )
       .bind(workspaceId)

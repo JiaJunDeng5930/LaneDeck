@@ -64,18 +64,30 @@ describe("center-worker storage contract", () => {
     const storage = new D1CenterStorage(db as unknown as D1Database);
 
     await storage.saveLaneRevision(
-      laneRevision("lane-revision-new", 2, "2026-06-10T10:00:02.000Z"),
+      laneRevision("lane-z-revision", 2, "2026-06-10T10:00:02.000Z", "lane.z"),
     );
     await storage.saveLaneRevision(
-      laneRevision("lane-revision-old", 1, "2026-06-10T10:00:01.000Z"),
+      laneRevision("lane-a-revision", 3, "2026-06-10T10:00:03.000Z", "lane.a"),
+    );
+    await storage.saveLaneRevision(
+      laneRevision(
+        "lane-z-old-revision",
+        1,
+        "2026-06-10T10:00:01.000Z",
+        "lane.z",
+      ),
     );
 
     await expect(
       storage.listCurrentLaneRevisions("workspace.local"),
     ).resolves.toEqual([
       expect.objectContaining({
-        laneId: "lane.local",
-        revision: "lane-revision-new",
+        laneId: "lane.a",
+        revision: "lane-a-revision",
+      }),
+      expect.objectContaining({
+        laneId: "lane.z",
+        revision: "lane-z-revision",
       }),
     ]);
   });
@@ -126,6 +138,44 @@ describe("center-worker storage contract", () => {
     expect(state.frames).toEqual([
       expect.objectContaining({ frameNo: 2 }),
       expect.objectContaining({ frameNo: 1 }),
+    ]);
+  });
+
+  it("orders current state frames with deterministic tie breakers", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+    const closedAt = "2026-06-10T10:00:00.000Z";
+
+    await storage.saveIngestBatch(
+      {
+        ...ingestBatch([{ ...frame(2), closedAt }]),
+        machineId: "machine.z",
+      },
+      "2026-06-10T10:00:20.000Z",
+    );
+    await storage.saveIngestBatch(
+      {
+        ...ingestBatch([
+          { ...frame(2), stage: "metric", closedAt },
+          { ...frame(2), closedAt },
+          { ...frame(1), closedAt },
+        ]),
+        machineId: "machine.a",
+      },
+      "2026-06-10T10:00:21.000Z",
+    );
+
+    const state = await storage.getCurrentState("workspace.local");
+
+    expect(
+      (
+        state.frames as { machineId: string; stage: string; frameNo: number }[]
+      ).map((frame) => [frame.machineId, frame.stage, frame.frameNo]),
+    ).toEqual([
+      ["machine.a", "event", 1],
+      ["machine.a", "event", 2],
+      ["machine.a", "metric", 2],
+      ["machine.z", "event", 2],
     ]);
   });
 
@@ -188,6 +238,38 @@ describe("center-worker storage contract", () => {
     expect(bucket.objectBody("content/revision-1/assets/index.js")).toBe(
       "console.log('ok')",
     );
+  });
+
+  it("rejects empty content source bodies at the R2 boundary", async () => {
+    const bucket = new FakeR2Bucket();
+    const store = new R2ContentStore(bucket as unknown as R2Bucket);
+
+    await expect(
+      store.writeContentSource({
+        workspaceId: "workspace.local",
+        revision: "revision-empty",
+        sourcePath: "src/main.tsx",
+        source: " ",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_content_source",
+      diagnostics: [expect.objectContaining({ path: "payload.source" })],
+    });
+
+    bucket.putObject(
+      "content-source/workspace.local/revision-empty/src/main.tsx",
+      "",
+      "text/plain; charset=utf-8",
+    );
+
+    await expect(
+      store.readContentSource(
+        "content-source/workspace.local/revision-empty/src/main.tsx",
+      ),
+    ).rejects.toMatchObject({
+      code: "invalid_content_source",
+      diagnostics: [expect.objectContaining({ path: "sourceKey" })],
+    });
   });
 
   it("writes build artifact bodies as decoded bytes", async () => {
@@ -375,14 +457,15 @@ function laneRevision(
   revision: string,
   mutationSequence: number,
   createdAt: string,
+  laneId = "lane.local",
 ): LaneRevisionRecord {
   return {
     workspaceId: "workspace.local",
     mutationId: `mutation-${mutationSequence}`,
     mutationSequence,
-    laneId: "lane.local",
+    laneId,
     revision,
-    settings: { laneId: "lane.local" },
+    settings: { laneId },
     createdAt,
   } as LaneRevisionRecord;
 }
@@ -664,7 +747,10 @@ class FakeD1Database {
           return (
             closedAtOrder ||
             right.batch_id.localeCompare(left.batch_id) ||
-            left.lane_id.localeCompare(right.lane_id)
+            left.lane_id.localeCompare(right.lane_id) ||
+            left.machine_id.localeCompare(right.machine_id) ||
+            left.stage.localeCompare(right.stage) ||
+            left.frame_no - right.frame_no
           );
         });
       return { results: results as T[] };
