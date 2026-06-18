@@ -1,14 +1,16 @@
 mod contract_helpers;
 
 use lanedeck_agent_runtime::{
-    AgentError, AgentService, ControlMessage, ControlReply, ScriptPurpose, ScriptSideEffectPolicy,
-    SpoolEntryId,
+    AgentConfig, AgentError, AgentService, ControlMessage, ControlReply, ScriptPurpose,
+    ScriptSideEffectPolicy, SpoolEntryId,
 };
 use serde_json::json;
 
 use contract_helpers::{
-    CenterProbe, ScriptRunnerProbe, SpoolProbe, content_root, diagnostic_script_output, duration,
-    empty_metric_agent_config, ingest_batch, instant, pending_spool_entry,
+    CenterProbe, ScriptRunnerProbe, SpoolProbe, agent_config_with_lane_config, content_root,
+    diagnostic_script_output, downstream_script_stage_missing_setting_cases,
+    duplicate_nested_lane_identity_agent_config, duration, empty_metric_agent_config, ingest_batch,
+    instant, mismatched_lane_identity_agent_config, pending_spool_entry,
     reloaded_script_lane_config, script_lane_agent_config, script_lane_agent_config_with_interval,
     script_output_with_record, script_output_with_records, scripted_metric_agent_config,
     scripted_metric_agent_config_with_upstream_history_limit, successful_script_output,
@@ -432,6 +434,19 @@ fn flush_max_batch_size_zero_is_rejected_as_config_error() {
     );
 }
 
+#[test]
+fn startup_rejects_duplicate_lane_identities() {
+    let duplicate_message =
+        new_service_config_message(duplicate_nested_lane_identity_agent_config());
+    let mismatch_message = new_service_config_message(mismatched_lane_identity_agent_config());
+
+    assert!(duplicate_message.contains("lane.cpu"));
+    assert!(duplicate_message.contains("configured more than once"));
+    assert!(mismatch_message.contains("lane.wrapper"));
+    assert!(mismatch_message.contains("lane.cpu"));
+    assert!(mismatch_message.contains("laneId"));
+}
+
 #[tokio::test]
 async fn apply_local_change_control_message_calls_local_content_write_handler() {
     let center = CenterProbe::accepting();
@@ -573,6 +588,63 @@ async fn per_lane_history_keeps_latest_configured_upstream_frame() {
         metric_inputs[2]["history"]["upstreamFrames"][0]["records"][0]["id"],
         "raw:second"
     );
+}
+
+#[tokio::test]
+async fn reload_refreshes_history_retention_limits() {
+    let first = instant(1_700_016_200);
+    let second = instant(1_700_016_201);
+    let third = instant(1_700_016_202);
+    let fourth = instant(1_700_016_203);
+    let fifth = instant(1_700_016_204);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        script_output_with_record("raw:first", first),
+        script_output_with_record("metric:first", first),
+        script_output_with_record("raw:second", second),
+        script_output_with_record("metric:second", second),
+        script_output_with_record("raw:third", third),
+        script_output_with_record("metric:third", third),
+        script_output_with_record("raw:fourth", fourth),
+        script_output_with_record("metric:fourth", fourth),
+        script_output_with_record("raw:fifth", fifth),
+        script_output_with_record("metric:fifth", fifth),
+    ]);
+    let mut config = scripted_metric_agent_config_with_upstream_history_limit(1);
+    config.lanes[0].schedule.interval_seconds = 1;
+    let mut service = AgentService::new(config, center, spool, runner.clone()).unwrap();
+
+    service.run_once(first).await.unwrap();
+    service.run_once(second).await.unwrap();
+    service.run_once(third).await.unwrap();
+
+    let mut reloaded_config = scripted_metric_agent_config_with_upstream_history_limit(2);
+    let reload_reply = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            reloaded_config.lanes.remove(0).config,
+        ))
+        .await
+        .unwrap();
+
+    service.run_once(fourth).await.unwrap();
+    service.run_once(fifth).await.unwrap();
+
+    let metric_inputs = metric_stage_inputs(&runner);
+    let before_reload_history = metric_inputs[2]["history"]["upstreamFrames"]
+        .as_array()
+        .unwrap();
+    let after_reload_history = metric_inputs[4]["history"]["upstreamFrames"]
+        .as_array()
+        .unwrap();
+
+    assert_eq!(reload_reply, ControlReply::accepted("reload_lane_config"));
+    assert_eq!(metric_inputs.len(), 5);
+    assert_eq!(before_reload_history.len(), 1);
+    assert_eq!(before_reload_history[0]["records"][0]["id"], "raw:second");
+    assert_eq!(after_reload_history.len(), 2);
+    assert_eq!(after_reload_history[0]["records"][0]["id"], "raw:third");
+    assert_eq!(after_reload_history[1]["records"][0]["id"], "raw:fourth");
 }
 
 #[tokio::test]
@@ -773,6 +845,84 @@ async fn run_report_carries_source_and_stage_diagnostics() {
     assert_eq!(report.diagnostics.len(), 2);
     assert_eq!(report.diagnostics[0].path, "rawStage.script");
     assert_eq!(report.diagnostics[1].path, "metricStage");
+}
+
+#[tokio::test]
+async fn downstream_script_stage_settings_validated_at_update_boundary() {
+    for (case_name, bad_lane, stage_path, missing_key) in
+        downstream_script_stage_missing_setting_cases()
+    {
+        let new_message =
+            new_service_config_message(agent_config_with_lane_config(bad_lane.clone()));
+        assert_downstream_config_message(&new_message, stage_path, missing_key, case_name);
+
+        let now = instant(1_700_017_500);
+        let spool = SpoolProbe::default();
+        let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+        let mut service = AgentService::new(
+            script_lane_agent_config(),
+            CenterProbe::accepting(),
+            spool.clone(),
+            runner.clone(),
+        )
+        .unwrap();
+
+        let reload_error = service
+            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .await
+            .unwrap_err();
+        let reload_message = config_message(reload_error);
+        assert_downstream_config_message(&reload_message, stage_path, missing_key, case_name);
+
+        let report = service.run_once(now).await.unwrap();
+        let requests = runner.requests();
+
+        assert_eq!(report.lane_execution_count, 1, "{case_name}");
+        assert_eq!(requests.len(), 1, "{case_name}");
+        assert_eq!(requests[0].purpose, ScriptPurpose::CollectSource);
+        assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+    }
+}
+
+fn new_service_config_message(config: AgentConfig) -> String {
+    let result = AgentService::new(
+        config,
+        CenterProbe::accepting(),
+        SpoolProbe::default(),
+        ScriptRunnerProbe::with_outputs(Vec::new()),
+    );
+
+    match result {
+        Ok(_) => panic!("expected config error"),
+        Err(error) => config_message(error),
+    }
+}
+
+fn config_message(error: AgentError) -> String {
+    match error {
+        AgentError::Config(message) => message,
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+fn assert_downstream_config_message(
+    message: &str,
+    stage_path: &str,
+    missing_key: &str,
+    case_name: &str,
+) {
+    assert!(message.contains("lane.cpu"), "{case_name}: {message}");
+    assert!(message.contains(stage_path), "{case_name}: {message}");
+    assert!(message.contains(missing_key), "{case_name}: {message}");
+}
+
+fn metric_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
+    runner
+        .requests()
+        .into_iter()
+        .filter(|request| request.purpose == ScriptPurpose::TransformStage)
+        .map(|request| request.input.unwrap())
+        .collect()
 }
 
 fn restart_prefix(batch_id: &str) -> &str {

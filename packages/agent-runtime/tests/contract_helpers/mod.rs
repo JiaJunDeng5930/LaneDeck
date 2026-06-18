@@ -50,6 +50,112 @@ pub fn scripted_metric_agent_config_with_upstream_history_limit(limit: u64) -> A
     config
 }
 
+pub fn duplicate_nested_lane_identity_agent_config() -> AgentConfig {
+    let first = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu-a", 5);
+    let second = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu-b", 5);
+    from_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.local",
+        "spool": {
+            "path": ":memory:"
+        },
+        "flush": {
+            "maxBatchSize": 16
+        },
+        "control": {
+            "url": "wss://center.local/agent/control"
+        },
+        "lanes": [
+            {
+                "laneId": "lane.cpu",
+                "schedule": {
+                    "intervalSeconds": 60
+                },
+                "config": first
+            },
+            {
+                "laneId": "lane.cpu",
+                "schedule": {
+                    "intervalSeconds": 60
+                },
+                "config": second
+            }
+        ]
+    }))
+}
+
+pub fn mismatched_lane_identity_agent_config() -> AgentConfig {
+    let lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    from_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.local",
+        "spool": {
+            "path": ":memory:"
+        },
+        "flush": {
+            "maxBatchSize": 16
+        },
+        "control": {
+            "url": "wss://center.local/agent/control"
+        },
+        "lanes": [
+            {
+                "laneId": "lane.wrapper",
+                "schedule": {
+                    "intervalSeconds": 60
+                },
+                "config": lane
+            }
+        ]
+    }))
+}
+
+pub fn agent_config_with_lane_config(lane: LaneConfig) -> AgentConfig {
+    agent_config_with_lane(lane)
+}
+
+pub fn downstream_script_stage_missing_setting_cases()
+-> Vec<(&'static str, LaneConfig, &'static str, &'static str)> {
+    vec![
+        (
+            "metric stage missing command",
+            downstream_script_stage_missing_setting("metricStage", "command"),
+            "metricStage",
+            "command",
+        ),
+        (
+            "metric stage missing cwd",
+            downstream_script_stage_missing_setting("metricStage", "cwd"),
+            "metricStage",
+            "cwd",
+        ),
+        (
+            "metric stage missing timeout",
+            downstream_script_stage_missing_setting("metricStage", "timeoutSeconds"),
+            "metricStage",
+            "timeoutSeconds",
+        ),
+        (
+            "event stage missing command",
+            downstream_script_stage_missing_setting("eventStage", "command"),
+            "eventStage",
+            "command",
+        ),
+        (
+            "event stage missing cwd",
+            downstream_script_stage_missing_setting("eventStage", "cwd"),
+            "eventStage",
+            "cwd",
+        ),
+        (
+            "event stage missing timeout",
+            downstream_script_stage_missing_setting("eventStage", "timeoutSeconds"),
+            "eventStage",
+            "timeoutSeconds",
+        ),
+    ]
+}
+
 pub fn two_record_frame_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.raw_stage.settings["frame"]["maxRecords"] = json!(2);
@@ -158,6 +264,43 @@ fn script_lane_config(lane_id: &str, cwd: &str, timeout_seconds: i64) -> LaneCon
             "settings": {}
         }
     }))
+}
+
+fn downstream_script_stage_missing_setting(
+    stage_path: &'static str,
+    missing_key: &str,
+) -> LaneConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+    let settings = script_stage_settings_without(missing_key);
+
+    match stage_path {
+        "metricStage" => {
+            lane.metric_stage.mode = from_json(json!("script"));
+            lane.metric_stage.settings = settings;
+        }
+        "eventStage" => {
+            lane.event_stage.mode = from_json(json!("script"));
+            lane.event_stage.settings = settings;
+        }
+        _ => unreachable!("known downstream stage path"),
+    }
+
+    lane
+}
+
+fn script_stage_settings_without(missing_key: &str) -> Value {
+    let mut settings = json!({
+        "command": "transform-cpu",
+        "cwd": "/var/lib/lanedeck/stages/downstream",
+        "timeoutSeconds": 7,
+        "captureStdout": true,
+        "captureStderr": true
+    });
+    settings
+        .as_object_mut()
+        .expect("script stage settings object")
+        .remove(missing_key);
+    settings
 }
 
 pub fn raw_record(id: &str, observed_at: DateTime<Utc>) -> FrameRecord {
