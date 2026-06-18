@@ -82,14 +82,10 @@ where
             return Err(AgentError::config("flush.maxBatchSize must be positive"));
         }
 
-        let workspace_id = config.workspace_id;
-        let machine_id = config.machine_id;
-        let control_url = config.control.url;
-        let flush_limit = config.flush.max_batch_size;
-        let runtime_seed = spool.allocate_runtime_seed(&workspace_id, &machine_id)?;
         let runner = Arc::new(runner);
         let mut lanes = Vec::with_capacity(config.lanes.len());
         let mut lane_ids = HashSet::with_capacity(config.lanes.len());
+        let mut prepared_lanes = Vec::with_capacity(config.lanes.len());
 
         for lane in config.lanes {
             let schedule_interval =
@@ -108,6 +104,16 @@ where
                 )));
             }
             validate_lane_config(&lane_config)?;
+            prepared_lanes.push((lane_config, schedule_interval));
+        }
+
+        let workspace_id = config.workspace_id;
+        let machine_id = config.machine_id;
+        let control_url = config.control.url;
+        let flush_limit = config.flush.max_batch_size;
+        let runtime_seed = spool.allocate_runtime_seed(&workspace_id, &machine_id)?;
+
+        for (lane_config, schedule_interval) in prepared_lanes {
             let next_frame_no = spool.load_lane_frame_cursor(&lane_config.lane_id)?;
             lanes.push(LaneRuntime::new(
                 lane_config,
@@ -293,6 +299,8 @@ where
         let message_id = message.message_id().clone();
 
         if let Some(result) = self.cached_control_completion(&message_id) {
+            self.spool
+                .mark_control_message_completed(message_id, result.clone())?;
             return result;
         }
         match self.spool.load_control_message(&message_id)? {
@@ -631,10 +639,17 @@ impl ServiceHistoryStore {
     }
 
     fn replace_limits(&self, limits: HistoryLimits) -> Result<(), AgentError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|error| AgentError::lane_engine(error.to_string()))?;
         *self
             .limits
             .lock()
             .map_err(|error| AgentError::lane_engine(error.to_string()))? = limits;
+        retain_tail(&mut inner.upstream_frames, limits.upstream_frames);
+        retain_tail(&mut inner.metric_frames, limits.metric_frames);
+        retain_tail(&mut inner.event_frames, limits.event_frames);
         Ok(())
     }
 }
@@ -710,6 +725,7 @@ fn validate_lane_config(lane: &LaneConfig) -> Result<(), AgentError> {
     }
 
     validate_script_settings(&lane.raw_stage.settings, "rawStage", &lane.lane_id)?;
+    validate_frame_settings(&lane.raw_stage.settings, &lane.lane_id)?;
     validate_optional_script_stage(
         &lane.metric_stage.mode,
         &lane.metric_stage.settings,
@@ -721,6 +737,38 @@ fn validate_lane_config(lane: &LaneConfig) -> Result<(), AgentError> {
         &lane.event_stage.settings,
         "eventStage",
         &lane.lane_id,
+    )?;
+
+    Ok(())
+}
+
+fn validate_frame_settings(settings: &Value, lane_id: &str) -> Result<(), AgentError> {
+    let max_records = settings["frame"]["maxRecords"].as_u64().ok_or_else(|| {
+        AgentError::config(format!(
+            "lane {lane_id} rawStage.settings.frame.maxRecords must be an integer"
+        ))
+    })?;
+    let max_seconds = settings["frame"]["maxSeconds"].as_i64().ok_or_else(|| {
+        AgentError::config(format!(
+            "lane {lane_id} rawStage.settings.frame.maxSeconds must be an integer"
+        ))
+    })?;
+
+    if max_records == 0 {
+        return Err(AgentError::config(format!(
+            "lane {lane_id} rawStage.settings.frame.maxRecords must be positive"
+        )));
+    }
+    if max_seconds <= 0 {
+        return Err(AgentError::config(format!(
+            "lane {lane_id} rawStage.settings.frame.maxSeconds must be positive"
+        )));
+    }
+    checked_duration_seconds(
+        max_seconds,
+        format!(
+            "lane {lane_id} rawStage.settings.frame.maxSeconds is outside supported duration range"
+        ),
     )?;
 
     Ok(())
