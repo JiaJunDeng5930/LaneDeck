@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ProtocolError,
   parseAgentControlMessage,
+  parseContentBuildCompleteRequest,
   parseFrame,
   parseIngestBatch,
   parseLaneConfig,
@@ -242,15 +243,71 @@ describe("protocol wire contract", () => {
       parseAgentControlMessage({
         type: "build_content",
         messageId: "control-build-main",
+        machineId: "machine.devbox",
         contentId: "content.home",
+        contentRevision: "revision-1",
         cwd: "/workspace/content",
         command: "corepack pnpm --filter @lanedeck/content build",
       }),
     ).toMatchObject({
       type: "build_content",
       messageId: "control-build-main",
+      machineId: "machine.devbox",
       contentId: "content.home",
+      contentRevision: "revision-1",
     });
+  });
+
+  it("rejects agent build control messages without target machine identity", () => {
+    expect(() =>
+      parseAgentControlMessage({
+        type: "build_content",
+        messageId: "control-build-main",
+        contentId: "content.home",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("accepts content build completion payloads", () => {
+    expect(
+      parseContentBuildCompleteRequest({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        buildRequestId: "build-1",
+        contentRevision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [
+          {
+            path: "index.html",
+            body: '<div id="root"></div>',
+            contentType: "text/html; charset=utf-8",
+          },
+          {
+            path: "assets/index.js",
+            body: "console.log('ok')",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      workspaceId: "workspace.local",
+      machineId: "machine.devbox",
+      contentRevision: "revision-1",
+      artifacts: [{ path: "index.html" }, { path: "assets/index.js" }],
+    });
+  });
+
+  it("rejects content build completion payloads without artifacts", () => {
+    expect(() =>
+      parseContentBuildCompleteRequest({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        buildRequestId: "build-1",
+        contentRevision: "revision-1",
+        entrypoint: "index.html",
+      }),
+    ).toThrow(ProtocolError);
   });
 
   it("accepts agent lane reload control messages", () => {
