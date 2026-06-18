@@ -138,7 +138,7 @@ describe("center-worker contract", () => {
         workspaceId: "workspace.local",
         query: "current_state",
         params: {},
-      }),
+      }, "read-token"),
       harness.env,
     );
 
@@ -175,7 +175,7 @@ describe("center-worker contract", () => {
         workspaceId: "workspace.local",
         query: "current_state",
         params: {},
-      }),
+      }, "read-token"),
       harness.env,
     );
 
@@ -195,6 +195,33 @@ describe("center-worker contract", () => {
         },
       ],
     });
+  });
+
+  it("POST /api/query rejects missing read token before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      jsonRequest("/api/query", {
+        workspaceId: "workspace.local",
+        query: "current_state",
+        params: {},
+      }),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+        LANEDECK_READ_TOKEN: "read-token",
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetched).toBe(false);
   });
 
   it("POST /api/ai/mutation writes content source to R2 and metadata to D1", async () => {
@@ -339,7 +366,10 @@ describe("center-worker contract", () => {
         "https://center.local/ws/browser?workspaceId=workspace.local",
         {
           method: "GET",
-          headers: { upgrade: "websocket" },
+          headers: {
+            authorization: "Bearer read-token",
+            upgrade: "websocket",
+          },
         },
       ),
       {
@@ -351,6 +381,7 @@ describe("center-worker contract", () => {
             },
           }),
         },
+        LANEDECK_READ_TOKEN: "read-token",
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
       },
@@ -358,6 +389,57 @@ describe("center-worker contract", () => {
 
     expect(response.status).toBe(204);
     expect(fetchedPath).toBe("/ws/browser");
+  });
+
+  it("browser WebSocket rejects missing read token before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/ws/browser?workspaceId=workspace.local", {
+        method: "GET",
+        headers: { upgrade: "websocket" },
+      }),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => ({
+            fetch: async () => {
+              fetched = true;
+              return new Response(null, { status: 204 });
+            },
+          }),
+        },
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetched).toBe(false);
+  });
+
+  it("GET /api/content/current rejects missing read token before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/api/content/current?workspaceId=workspace.local",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetched).toBe(false);
   });
 
   it("agent WebSocket rejects missing agent token before coordinator fetch", async () => {
@@ -496,6 +578,33 @@ describe("center-worker contract", () => {
         },
       ],
     });
+  });
+
+  it("local build mutation sends a build command to one connected agent", async () => {
+    const harness = createHarness();
+    const firstAgent = new RecordingSocket();
+    const secondAgent = new RecordingSocket();
+    harness.live.addAgent(firstAgent);
+    harness.live.addAgent(secondAgent);
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "request_local_build",
+        payload: {
+          contentId: "content.home",
+          cwd: "/workspace/content",
+          command: "corepack pnpm --filter @lanedeck/content build",
+        },
+      }),
+    ).resolves.toMatchObject({
+      mutation: "request_local_build",
+      diagnostics: [],
+    });
+
+    expect(
+      firstAgent.decodedMessages().length + secondAgent.decodedMessages().length,
+    ).toBe(1);
   });
 
   it("lane config mutation stores revision and asks agents to reload", async () => {
@@ -715,6 +824,7 @@ function createHarness(storage = new MemoryCenterStorage()) {
     LANEDECK_BUCKET: {},
     LANEDECK_AI_MUTATION_TOKEN: "ai-token",
     LANEDECK_AGENT_TOKEN: "agent-token",
+    LANEDECK_READ_TOKEN: "read-token",
   };
 
   return { storage, objects, live, workspace, env };
