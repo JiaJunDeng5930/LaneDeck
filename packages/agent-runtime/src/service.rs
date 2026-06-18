@@ -41,6 +41,7 @@ struct LaneRuntime<R> {
     schedule_interval: Duration,
     next_run_at: Option<DateTime<Utc>>,
     pending_source_records: VecDeque<FrameRecord>,
+    deferred_history_limits: Option<HistoryLimits>,
     history_store: ServiceHistoryStore,
     engine: LaneEngine<ServiceHistoryStore, ServiceStageRunner<R>>,
 }
@@ -147,6 +148,13 @@ where
                 continue;
             }
             self.apply_pipeline_effects(pending_close_report.effects, &mut report)?;
+            if let Err(error) = self.lanes[lane_index].apply_deferred_history_limits() {
+                report
+                    .diagnostics
+                    .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                self.lanes[lane_index].mark_run(now);
+                continue;
+            }
 
             if self.lanes[lane_index].pending_source_records.is_empty() {
                 let request = match collect_source_request(&self.lanes[lane_index].lane) {
@@ -516,6 +524,7 @@ where
             schedule_interval,
             next_run_at: None,
             pending_source_records: VecDeque::new(),
+            deferred_history_limits: None,
             history_store,
             engine,
         })
@@ -531,12 +540,29 @@ where
     }
 
     fn replace_config(&mut self, lane: LaneConfig) -> Result<(), AgentError> {
+        let next_history_limits = history_limits(&lane);
+        let defer_history_limits = self.engine.has_pending_close();
         self.engine
             .replace_config(lane.clone())
             .map_err(map_engine_error)?;
-        self.history_store.replace_limits(history_limits(&lane))?;
+        if defer_history_limits {
+            self.deferred_history_limits = Some(next_history_limits);
+        } else {
+            self.history_store.replace_limits(next_history_limits)?;
+        }
         self.lane = lane;
 
+        Ok(())
+    }
+
+    fn apply_deferred_history_limits(&mut self) -> Result<(), AgentError> {
+        if self.engine.has_pending_close() {
+            return Ok(());
+        }
+        if let Some(limits) = self.deferred_history_limits {
+            self.history_store.replace_limits(limits)?;
+            self.deferred_history_limits = None;
+        }
         Ok(())
     }
 }
