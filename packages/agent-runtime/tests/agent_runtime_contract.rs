@@ -1,5 +1,7 @@
 mod contract_helpers;
 
+use std::path::PathBuf;
+
 use lanedeck_agent_runtime::{
     AgentConfig, AgentError, AgentService, ControlMessage, ControlMessageRecord, ControlReply,
     ScriptPurpose, ScriptRunOutput, ScriptSideEffectPolicy, SpoolEntryId,
@@ -719,6 +721,84 @@ async fn build_content_control_message_rejects_other_machine() {
         other => panic!("unexpected error: {other:?}"),
     }
     assert!(runner.requests().is_empty());
+}
+
+#[tokio::test]
+async fn build_content_control_message_rejects_empty_identity_fields() {
+    let cases = [
+        (
+            "machineId",
+            ControlMessage::build_content(
+                "control-build-empty-machine",
+                "",
+                "dashboard-main",
+                "revision-1",
+                content_root(),
+                "corepack pnpm --filter @lanedeck/content build",
+            ),
+        ),
+        (
+            "contentId",
+            ControlMessage::build_content(
+                "control-build-empty-content",
+                "machine.local",
+                "",
+                "revision-1",
+                content_root(),
+                "corepack pnpm --filter @lanedeck/content build",
+            ),
+        ),
+        (
+            "contentRevision",
+            ControlMessage::build_content(
+                "control-build-empty-revision",
+                "machine.local",
+                "dashboard-main",
+                "",
+                content_root(),
+                "corepack pnpm --filter @lanedeck/content build",
+            ),
+        ),
+        (
+            "cwd",
+            ControlMessage::build_content(
+                "control-build-empty-cwd",
+                "machine.local",
+                "dashboard-main",
+                "revision-1",
+                PathBuf::new(),
+                "corepack pnpm --filter @lanedeck/content build",
+            ),
+        ),
+        (
+            "command",
+            ControlMessage::build_content(
+                "control-build-empty-command",
+                "machine.local",
+                "dashboard-main",
+                "revision-1",
+                content_root(),
+                "",
+            ),
+        ),
+    ];
+
+    for (field, message) in cases {
+        let center = CenterProbe::accepting();
+        let spool = SpoolProbe::default();
+        let runner =
+            ScriptRunnerProbe::with_outputs(vec![successful_script_output(instant(1_700_014_020))]);
+        let mut service =
+            AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+        let error = service.handle_control_message(message).await.unwrap_err();
+
+        match error {
+            AgentError::Config(message) => assert!(message.contains(field)),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(runner.requests().is_empty());
+    }
 }
 
 #[tokio::test]
