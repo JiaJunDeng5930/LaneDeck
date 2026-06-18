@@ -276,6 +276,7 @@ describe("protocol wire contract", () => {
         workspaceId: "workspace.local",
         machineId: "machine.devbox",
         buildRequestId: "build-1",
+        contentId: "content.home",
         contentRevision: "revision-1",
         entrypoint: "index.html",
         artifacts: [
@@ -293,9 +294,23 @@ describe("protocol wire contract", () => {
     ).toMatchObject({
       workspaceId: "workspace.local",
       machineId: "machine.devbox",
+      contentId: "content.home",
       contentRevision: "revision-1",
       artifacts: [{ path: "index.html" }, { path: "assets/index.js" }],
     });
+  });
+
+  it("rejects content build completion payloads without content identity", () => {
+    expect(() =>
+      parseContentBuildCompleteRequest({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        buildRequestId: "build-1",
+        contentRevision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+      }),
+    ).toThrow(ProtocolError);
   });
 
   it("rejects content build completion payloads without artifacts", () => {
@@ -304,6 +319,7 @@ describe("protocol wire contract", () => {
         workspaceId: "workspace.local",
         machineId: "machine.devbox",
         buildRequestId: "build-1",
+        contentId: "content.home",
         contentRevision: "revision-1",
         entrypoint: "index.html",
       }),
