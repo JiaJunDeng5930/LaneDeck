@@ -14,12 +14,26 @@ describe("center-worker storage contract", () => {
     const db = new FakeD1Database();
     const storage = new D1CenterStorage(db as unknown as D1Database);
 
-    await storage.saveContentRevision(
+    await storage.saveContentSourceRevision(
       contentRevision("revision-new", 2, "2026-06-10T10:00:02.000Z"),
     );
-    await storage.saveContentRevision(
+    await storage.saveContentSourceRevision(
       contentRevision("revision-old", 1, "2026-06-10T10:00:01.000Z"),
     );
+    await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-new",
+      contentPath: "index.html",
+      assetKey: "content/revision-new/index.html",
+      promotedAt: "2026-06-10T10:00:03.000Z",
+    });
+    await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-old",
+      contentPath: "index.html",
+      assetKey: "content/revision-old/index.html",
+      promotedAt: "2026-06-10T10:00:04.000Z",
+    });
 
     await expect(storage.getCurrentContent("workspace.local")).resolves.toEqual(
       expect.objectContaining({ revision: "revision-new" }),
@@ -218,7 +232,6 @@ describe("center-worker storage contract", () => {
       workspaceId: "workspace.local",
       revision: "revision-1",
       sourcePath: "src/dashboard.tsx",
-      contentPath: "index.html",
       source: "<h1>patched</h1>",
     };
 
@@ -232,13 +245,14 @@ describe("center-worker storage contract", () => {
       diagnostics: [expect.objectContaining({ path: "payload.path" })],
     });
     await expect(
-      store.writeContentSource({
-        ...write,
-        contentPath: "assets\\logo.svg",
+      store.writeContentBuildArtifacts({
+        revision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [{ path: "assets\\logo.svg", body: "<svg></svg>" }],
       }),
     ).rejects.toMatchObject({
       code: "invalid_object_path",
-      diagnostics: [expect.objectContaining({ path: "payload.contentPath" })],
+      diagnostics: [expect.objectContaining({ path: "artifacts.0.path" })],
     });
     await expect(
       store.readContentAsset("revision\\1", "index.html"),
@@ -502,6 +516,16 @@ class FakeD1Database {
         created_at: createdAt,
         metadata_json: metadataJson,
       });
+    }
+
+    if (sql.includes("UPDATE content_revisions")) {
+      const [contentPath, assetKey, workspaceId, revision] =
+        bindings as string[];
+      const row = this.contentRevisions.get(contentKey(workspaceId, revision));
+      if (row !== undefined) {
+        row.content_path = contentPath;
+        row.asset_key = assetKey;
+      }
     }
 
     if (sql.includes("INSERT INTO lane_revisions")) {

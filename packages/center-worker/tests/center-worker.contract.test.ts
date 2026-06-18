@@ -4,11 +4,16 @@ import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
 import { handleRequest } from "../src/router";
 import { rewriteViteAssetReferences } from "../src/storage/r2";
 import type {
+  ContentBuildArtifactWrite,
+  ContentBuildObjectKeys,
+  ContentBuildRequestRecord,
   CenterStorage,
-  ContentObjectKeys,
   ContentObjectStore,
   ContentObjectWrite,
+  ContentRevisionPromotion,
+  ContentRevisionPromotionResult,
   ContentRevisionRecord,
+  ContentSourceObjectKeys,
   LaneRevisionRecord,
 } from "../src/storage/types";
 import { WorkspaceService } from "../src/workspace";
@@ -459,7 +464,7 @@ describe("center-worker contract", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_mutation_payload",
-      diagnostics: [expect.objectContaining({ path: "payload.contentId" })],
+      diagnostics: [expect.objectContaining({ path: "payload.machineId" })],
     });
     expect(harness.storage.mutations).toHaveLength(0);
   });
@@ -731,6 +736,17 @@ describe("center-worker contract", () => {
         source: "<main>live</main>",
       },
     });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: {
+        machineId: "machine.local",
+        contentId: "content.home",
+        contentRevision: "id-2",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
 
     const response = await handleRequest(
       jsonRequest(
@@ -738,7 +754,7 @@ describe("center-worker contract", () => {
         {
           workspaceId: "workspace.local",
           machineId: "machine.local",
-          buildRequestId: "build-1",
+          buildRequestId: "id-4",
           contentRevision: "id-2",
           entrypoint: "index.html",
           artifacts: [
@@ -848,6 +864,17 @@ describe("center-worker contract", () => {
         source: "<main>historical</main>",
       },
     });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: {
+        machineId: "machine.local",
+        contentId: "content.home",
+        contentRevision: "id-2",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
 
     const response = await handleRequest(
       jsonRequest(
@@ -855,7 +882,7 @@ describe("center-worker contract", () => {
         {
           workspaceId: "workspace.local",
           machineId: "machine.local",
-          buildRequestId: "build-1",
+          buildRequestId: "id-4",
           contentRevision: "id-2",
           entrypoint: "index.html",
           artifacts: [{ path: "index.html", body: "<main>built</main>" }],
@@ -1187,6 +1214,9 @@ function createHarness(storage = new MemoryCenterStorage()) {
           workspace.query(request),
         mutate: (request: Parameters<WorkspaceService["mutate"]>[0]) =>
           workspace.mutate(request),
+        buildComplete: (
+          request: Parameters<WorkspaceService["buildComplete"]>[0],
+        ) => workspace.buildComplete(request),
         connectAgent: async () => new Response(null, { status: 204 }),
         connectBrowser: async () => new Response(null, { status: 204 }),
         fetch: async () => new Response(null, { status: 204 }),
@@ -1255,17 +1285,31 @@ class MemoryContentObjectStore implements ContentObjectStore {
 
   async writeContentSource(
     write: ContentObjectWrite,
-  ): Promise<ContentObjectKeys> {
+  ): Promise<ContentSourceObjectKeys> {
     const sourceKey = [
       "content-source",
       write.workspaceId,
       write.revision,
       write.sourcePath,
     ].join("/");
-    const assetKey = ["content", write.revision, write.contentPath].join("/");
     this.writes.set(sourceKey, write.source);
-    this.writes.set(assetKey, write.source);
-    return { sourceKey, assetKey };
+    return { sourceKey };
+  }
+
+  async writeContentBuildArtifacts(
+    write: ContentBuildArtifactWrite,
+  ): Promise<ContentBuildObjectKeys> {
+    const assetKeys: string[] = [];
+    let entrypointKey = "";
+    for (const artifact of write.artifacts) {
+      const key = ["content", write.revision, artifact.path].join("/");
+      this.writes.set(key, artifact.body);
+      assetKeys.push(key);
+      if (artifact.path === write.entrypoint) {
+        entrypointKey = key;
+      }
+    }
+    return { entrypointKey, assetKeys };
   }
 }
 
@@ -1273,10 +1317,12 @@ class MemoryCenterStorage implements CenterStorage {
   readonly batches: IngestBatch[] = [];
   readonly frames: IngestBatch["frames"] = [];
   readonly contentRevisions: ContentRevisionRecord[] = [];
+  readonly contentBuildRequests: ContentBuildRequestRecord[] = [];
   readonly mutations: MutationRequest[] = [];
   readonly laneRevisions: LaneRevisionRecord[] = [];
   writeCount = 0;
   private mutationSequence = 0;
+  protected currentContentRevision: string | null = null;
 
   async initialize(): Promise<void> {}
 
@@ -1287,11 +1333,14 @@ class MemoryCenterStorage implements CenterStorage {
   }
 
   async getCurrentState(workspaceId: string): Promise<JsonObject> {
-    const currentContent = currentByMutationSequence(
-      this.contentRevisions.filter(
-        (record) => record.workspaceId === workspaceId,
-      ),
-    );
+    const currentContent =
+      this.currentContentRevision === null
+        ? null
+        : (this.contentRevisions.find(
+            (record) =>
+              record.workspaceId === workspaceId &&
+              record.revision === this.currentContentRevision,
+          ) ?? null);
     return {
       workspaceId,
       frames: this.batches.flatMap((batch) =>
@@ -1319,25 +1368,64 @@ class MemoryCenterStorage implements CenterStorage {
     };
   }
 
-  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
+  async saveContentSourceRevision(
+    record: ContentRevisionRecord,
+  ): Promise<void> {
     this.writeCount += 1;
     this.contentRevisions.push(record);
-    return (
-      currentByMutationSequence(
-        this.contentRevisions.filter(
-          (candidate) => candidate.workspaceId === record.workspaceId,
-        ),
-      )?.revision === record.revision
+  }
+
+  async promoteContentRevision(
+    promotion: ContentRevisionPromotion,
+  ): Promise<ContentRevisionPromotionResult> {
+    this.writeCount += 1;
+    const record = this.contentRevisions.find(
+      (candidate) =>
+        candidate.workspaceId === promotion.workspaceId &&
+        candidate.revision === promotion.revision,
     );
+    if (record === undefined) {
+      throw new Error("content revision was not found");
+    }
+    record.contentPath = promotion.contentPath;
+    record.assetKey = promotion.assetKey;
+    this.currentContentRevision = record.revision;
+    return { record, isCurrent: true };
   }
 
   async getCurrentContent(
     workspaceId: string,
   ): Promise<ContentRevisionRecord | null> {
-    const records = this.contentRevisions.filter(
-      (record) => record.workspaceId === workspaceId,
+    if (this.currentContentRevision === null) {
+      return null;
+    }
+    return (
+      this.contentRevisions.find(
+        (record) =>
+          record.workspaceId === workspaceId &&
+          record.revision === this.currentContentRevision,
+      ) ?? null
     );
-    return currentByMutationSequence(records);
+  }
+
+  async saveContentBuildRequest(
+    record: ContentBuildRequestRecord,
+  ): Promise<void> {
+    this.writeCount += 1;
+    this.contentBuildRequests.push(record);
+  }
+
+  async getContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<ContentBuildRequestRecord | null> {
+    return (
+      this.contentBuildRequests.find(
+        (record) =>
+          record.workspaceId === workspaceId &&
+          record.buildRequestId === buildRequestId,
+      ) ?? null
+    );
   }
 
   async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {
@@ -1384,9 +1472,13 @@ class MemoryCenterStorage implements CenterStorage {
 }
 
 class SupersededStorage extends MemoryCenterStorage {
-  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
-    await super.saveContentRevision(record);
-    return false;
+  async promoteContentRevision(
+    promotion: ContentRevisionPromotion,
+  ): Promise<ContentRevisionPromotionResult> {
+    const previousCurrent = this.currentContentRevision;
+    const result = await super.promoteContentRevision(promotion);
+    this.currentContentRevision = previousCurrent;
+    return { ...result, isCurrent: false };
   }
 
   async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {
