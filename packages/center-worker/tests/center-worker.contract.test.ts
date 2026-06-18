@@ -543,6 +543,41 @@ describe("center-worker contract", () => {
     expect(fetched).toBe(false);
   });
 
+  it("GET /content decodes browser-encoded asset path segments before R2 lookup", async () => {
+    const harness = createHarness();
+    const bucket = new RouteR2Bucket();
+    bucket.putObject(
+      "content/revision-1/assets/my logo.svg",
+      "<svg></svg>",
+      "image/svg+xml",
+    );
+
+    const response = await handleRequest(
+      new Request("https://center.local/content/revision-1/assets/my%20logo.svg"),
+      {
+        ...harness.env,
+        LANEDECK_BUCKET: bucket as unknown as R2Bucket,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("<svg></svg>");
+  });
+
+  it("GET /content rejects encoded slash inside asset path segments", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      new Request("https://center.local/content/revision-1/assets/my%2Flogo.svg"),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_path",
+      diagnostics: [expect.objectContaining({ path: "path" })],
+    });
+  });
+
   it("agent WebSocket rejects missing agent token before coordinator fetch", async () => {
     let fetched = false;
     const response = await handleRequest(
@@ -953,6 +988,30 @@ class RecordingSocket implements LiveSocket {
 
   decodedMessages(): JsonObject[] {
     return this.messages.map((message) => JSON.parse(message) as JsonObject);
+  }
+}
+
+class RouteR2Bucket {
+  private readonly objects = new Map<
+    string,
+    { body: string; contentType: string }
+  >();
+
+  putObject(key: string, body: string, contentType: string): void {
+    this.objects.set(key, { body, contentType });
+  }
+
+  async get(key: string): Promise<R2ObjectBody | null> {
+    const object = this.objects.get(key);
+    if (object === undefined) {
+      return null;
+    }
+
+    return {
+      body: object.body,
+      httpMetadata: { contentType: object.contentType },
+      text: async () => object.body,
+    } as unknown as R2ObjectBody;
   }
 }
 
