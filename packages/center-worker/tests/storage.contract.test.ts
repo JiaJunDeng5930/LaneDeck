@@ -461,18 +461,16 @@ class FakeD1Database {
       const [workspaceId] = bindings as string[];
       const results = [...this.frames.values()]
         .filter((row) => row.workspace_id === workspaceId)
-        .sort(
-          (left, right) => {
-            const closedAtOrder = sql.includes("closed_at_epoch_ms")
-              ? right.closed_at_epoch_ms - left.closed_at_epoch_ms
-              : right.closed_at.localeCompare(left.closed_at);
-            return (
-              closedAtOrder ||
-              right.batch_id.localeCompare(left.batch_id) ||
-              left.lane_id.localeCompare(right.lane_id)
-            );
-          },
-        );
+        .sort((left, right) => {
+          const closedAtOrder = sql.includes("closed_at_epoch_ms")
+            ? right.closed_at_epoch_ms - left.closed_at_epoch_ms
+            : right.closed_at.localeCompare(left.closed_at);
+          return (
+            closedAtOrder ||
+            right.batch_id.localeCompare(left.batch_id) ||
+            left.lane_id.localeCompare(right.lane_id)
+          );
+        });
       return { results: results as T[] };
     }
 

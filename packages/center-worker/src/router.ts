@@ -89,7 +89,7 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
-    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
+    requireBrowserReadToken(request, url, env.LANEDECK_READ_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -167,6 +167,35 @@ function requireBearerToken(
       },
     ]);
   }
+}
+
+function requireBrowserReadToken(
+  request: Request,
+  url: URL,
+  expectedToken: string | undefined,
+): void {
+  if (expectedToken === undefined || expectedToken.length === 0) {
+    throw new ApiError(500, "authentication_not_configured", [
+      {
+        path: "authorization",
+        message: "expected configured bearer token",
+      },
+    ]);
+  }
+
+  if (
+    request.headers.get("authorization") === `Bearer ${expectedToken}` ||
+    url.searchParams.get("readToken") === expectedToken
+  ) {
+    return;
+  }
+
+  throw new ApiError(401, "authentication_failed", [
+    {
+      path: "authorization",
+      message: "expected valid bearer token",
+    },
+  ]);
 }
 
 function requiredWorkspaceId(url: URL): string {

@@ -50,8 +50,10 @@ export class R2ContentStore {
     if (
       normalizedAssetPath.endsWith(".html") ||
       normalizedAssetPath.endsWith(".css") ||
+      normalizedAssetPath.endsWith(".js") ||
       contentType.startsWith("text/html") ||
-      contentType.startsWith("text/css")
+      contentType.startsWith("text/css") ||
+      contentType.includes("javascript")
     ) {
       return new Response(
         rewriteViteAssetReferences(await object.text(), normalizedRevision),

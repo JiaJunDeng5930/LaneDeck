@@ -21,6 +21,7 @@ interface FrameRow {
   frame_no: number;
   opened_at: string;
   closed_at: string;
+  closed_at_epoch_ms: number;
   trigger_kind: string;
   record_count: number;
   summary_json: string;
@@ -51,7 +52,7 @@ interface LaneRevisionRow {
 
 const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS ingest_batches (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, frame_count INTEGER NOT NULL, ingested_at TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id))",
-  "CREATE TABLE IF NOT EXISTS frames (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL, trigger_kind TEXT NOT NULL, record_count INTEGER NOT NULL, summary_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no))",
+  "CREATE TABLE IF NOT EXISTS frames (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL, closed_at_epoch_ms INTEGER NOT NULL, trigger_kind TEXT NOT NULL, record_count INTEGER NOT NULL, summary_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no))",
   "CREATE TABLE IF NOT EXISTS frame_records (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, record_id TEXT NOT NULL, observed_at TEXT NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no, record_id))",
   "CREATE TABLE IF NOT EXISTS mutation_log (mutation_sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (workspace_id, mutation_id))",
   "CREATE TABLE IF NOT EXISTS content_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, revision TEXT NOT NULL, source_path TEXT NOT NULL, content_path TEXT NOT NULL, source_key TEXT NOT NULL, asset_key TEXT NOT NULL, created_at TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY (workspace_id, revision))",
@@ -112,12 +113,13 @@ export class D1CenterStorage implements CenterStorage {
           frame_no,
           opened_at,
           closed_at,
+          closed_at_epoch_ms,
           trigger_kind,
           record_count,
           summary_json
         FROM frames
         WHERE workspace_id = ?
-        ORDER BY closed_at DESC, batch_id DESC, lane_id ASC
+        ORDER BY closed_at_epoch_ms DESC, batch_id DESC, lane_id ASC
         LIMIT 100`,
       )
       .bind(workspaceId)
@@ -335,10 +337,11 @@ export class D1CenterStorage implements CenterStorage {
           frame_no,
           opened_at,
           closed_at,
+          closed_at_epoch_ms,
           trigger_kind,
           record_count,
           summary_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         batch.workspaceId,
@@ -349,6 +352,7 @@ export class D1CenterStorage implements CenterStorage {
         frame.frameNo,
         frame.openedAt,
         frame.closedAt,
+        epochMilliseconds(frame.closedAt),
         frame.triggerKind,
         frame.recordCount,
         JSON.stringify(frame.summary),
@@ -500,6 +504,15 @@ function parseJsonObject(value: string): JsonObject {
   }
 
   return {};
+}
+
+function epochMilliseconds(timestamp: string): number {
+  const value = Date.parse(timestamp);
+  if (Number.isFinite(value)) {
+    return value;
+  }
+
+  throw new Error("expected valid RFC 3339 timestamp");
 }
 
 function isJsonObject(value: JsonValue): value is JsonObject {
