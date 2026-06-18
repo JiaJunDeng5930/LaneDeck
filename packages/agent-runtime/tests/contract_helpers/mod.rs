@@ -265,6 +265,11 @@ pub fn reloaded_script_lane_config() -> LaneConfig {
     script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu-reloaded", 9)
 }
 
+pub fn reloaded_scripted_metric_lane_config() -> LaneConfig {
+    let mut config = scripted_metric_agent_config();
+    config.lanes.remove(0).config
+}
+
 pub fn unknown_script_lane_config() -> LaneConfig {
     script_lane_config("lane.unknown", "/var/lib/lanedeck/sources/unknown", 5)
 }
@@ -433,6 +438,18 @@ pub fn ingest_batch(batch_id: &str, now: DateTime<Utc>) -> IngestBatch {
     }))
 }
 
+pub fn two_frame_ingest_batch(batch_id: &str, now: DateTime<Utc>) -> IngestBatch {
+    from_json(json!({
+        "workspaceId": "workspace.local",
+        "machineId": "machine.local",
+        "batchId": batch_id,
+        "frames": [
+            event_frame("event:1", now),
+            event_frame("event:2", now)
+        ]
+    }))
+}
+
 pub fn pending_spool_entry(id: &str, batch: IngestBatch) -> SpoolEntry {
     SpoolEntry::pending(SpoolEntryId::from(id), batch)
 }
@@ -476,6 +493,8 @@ struct CenterProbeState {
 enum CenterPostOutcome {
     Ack,
     AckWithBatchId(String),
+    AckWithDiagnostics,
+    AckWithAcceptedFrameCount(usize),
     RejectValidation,
     NetworkFailure,
 }
@@ -487,6 +506,16 @@ impl CenterProbe {
 
     pub fn acknowledging_batch_id(batch_id: &str) -> Self {
         Self::with_outcome(CenterPostOutcome::AckWithBatchId(batch_id.to_string()))
+    }
+
+    pub fn accepting_with_diagnostics() -> Self {
+        Self::with_outcome(CenterPostOutcome::AckWithDiagnostics)
+    }
+
+    pub fn acknowledging_frame_count(accepted_frame_count: usize) -> Self {
+        Self::with_outcome(CenterPostOutcome::AckWithAcceptedFrameCount(
+            accepted_frame_count,
+        ))
     }
 
     pub fn failing_network() -> Self {
@@ -528,6 +557,23 @@ impl CenterClient for CenterProbe {
                 "acceptedFrameCount": batch.frames.len(),
                 "diagnostics": []
             }))),
+            CenterPostOutcome::AckWithDiagnostics => Ok(from_json(json!({
+                "batchId": batch.batch_id,
+                "acceptedFrameCount": batch.frames.len(),
+                "diagnostics": [
+                    {
+                        "path": "broadcast",
+                        "message": "broadcast delayed"
+                    }
+                ]
+            }))),
+            CenterPostOutcome::AckWithAcceptedFrameCount(accepted_frame_count) => {
+                Ok(from_json(json!({
+                    "batchId": batch.batch_id,
+                    "acceptedFrameCount": accepted_frame_count,
+                    "diagnostics": []
+                })))
+            }
             CenterPostOutcome::RejectValidation => Ok(from_json(json!({
                 "batchId": batch.batch_id,
                 "acceptedFrameCount": 0,
