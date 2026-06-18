@@ -63,6 +63,8 @@ interface ContentBuildRequestRow {
   cwd: string;
   command: string;
   created_at: string;
+  status: string;
+  completed_at: string | null;
 }
 
 const schemaStatements = [
@@ -71,7 +73,7 @@ const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS frame_records (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, record_id TEXT NOT NULL, observed_at TEXT NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no, record_id))",
   "CREATE TABLE IF NOT EXISTS mutation_log (mutation_sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (workspace_id, mutation_id))",
   "CREATE TABLE IF NOT EXISTS content_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, revision TEXT NOT NULL, source_path TEXT NOT NULL, content_path TEXT NOT NULL, source_key TEXT NOT NULL, asset_key TEXT NOT NULL, created_at TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY (workspace_id, revision))",
-  "CREATE TABLE IF NOT EXISTS content_build_requests (workspace_id TEXT NOT NULL, build_request_id TEXT NOT NULL, mutation_id TEXT NOT NULL, machine_id TEXT NOT NULL, content_id TEXT NOT NULL, content_revision TEXT NOT NULL, cwd TEXT NOT NULL, command TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, build_request_id))",
+  "CREATE TABLE IF NOT EXISTS content_build_requests (workspace_id TEXT NOT NULL, build_request_id TEXT NOT NULL, mutation_id TEXT NOT NULL, machine_id TEXT NOT NULL, content_id TEXT NOT NULL, content_revision TEXT NOT NULL, cwd TEXT NOT NULL, command TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL, completed_at TEXT, PRIMARY KEY (workspace_id, build_request_id))",
   "CREATE TABLE IF NOT EXISTS lane_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, lane_id TEXT NOT NULL, revision TEXT NOT NULL, settings_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, lane_id, revision))",
   "CREATE TABLE IF NOT EXISTS workspace_pointers (workspace_id TEXT NOT NULL, pointer_key TEXT NOT NULL, pointer_value TEXT NOT NULL, pointer_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (workspace_id, pointer_key))",
 ];
@@ -212,7 +214,7 @@ export class D1CenterStorage implements CenterStorage {
       assetKey: promotion.assetKey,
     };
 
-    await this.db.batch([
+    const statements = [
       this.db
         .prepare(
           `UPDATE content_revisions
@@ -232,7 +234,25 @@ export class D1CenterStorage implements CenterStorage {
         existing.mutationSequence,
         promotion.promotedAt,
       ),
-    ]);
+    ];
+    if (promotion.buildRequestId !== undefined) {
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE content_build_requests
+            SET status = ?, completed_at = ?
+            WHERE workspace_id = ? AND build_request_id = ?`,
+          )
+          .bind(
+            "completed",
+            promotion.promotedAt,
+            promotion.workspaceId,
+            promotion.buildRequestId,
+          ),
+      );
+    }
+
+    await this.db.batch(statements);
     return await this.pointerMatches(
       promotion.workspaceId,
       "current_content_revision",
@@ -273,8 +293,10 @@ export class D1CenterStorage implements CenterStorage {
           content_revision,
           cwd,
           command,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          created_at,
+          status,
+          completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         record.workspaceId,
@@ -286,6 +308,8 @@ export class D1CenterStorage implements CenterStorage {
         record.cwd,
         record.command,
         record.createdAt,
+        record.status,
+        record.completedAt,
       )
       .run();
   }
@@ -305,7 +329,9 @@ export class D1CenterStorage implements CenterStorage {
           content_revision,
           cwd,
           command,
-          created_at
+          created_at,
+          status,
+          completed_at
         FROM content_build_requests
         WHERE workspace_id = ? AND build_request_id = ?`,
       )
@@ -315,7 +341,7 @@ export class D1CenterStorage implements CenterStorage {
     return row === null ? null : contentBuildRequestFromRow(row);
   }
 
-  private async getContentRevision(
+  async getContentRevision(
     workspaceId: string,
     revision: string,
   ): Promise<ContentRevisionRecord | null> {
@@ -607,6 +633,8 @@ function contentBuildRequestFromRow(
     cwd: row.cwd,
     command: row.command,
     createdAt: row.created_at,
+    status: row.status === "completed" ? "completed" : "pending",
+    completedAt: row.completed_at,
   };
 }
 

@@ -535,7 +535,9 @@ describe("center-worker contract", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_mutation_payload",
-      diagnostics: [expect.objectContaining({ path: "payload.contentRevision" })],
+      diagnostics: [
+        expect.objectContaining({ path: "payload.contentRevision" }),
+      ],
     });
     expect(harness.storage.mutations).toHaveLength(0);
   });
@@ -1167,6 +1169,8 @@ describe("center-worker contract", () => {
       cwd: "/workspace/content",
       command: "corepack pnpm --filter @lanedeck/content build",
       createdAt: "2026-06-10T10:00:00.000Z",
+      status: "pending",
+      completedAt: null,
     });
 
     const response = await handleRequest(
@@ -1744,6 +1748,18 @@ class MemoryCenterStorage implements CenterStorage {
     this.contentRevisions.push(record);
   }
 
+  async getContentRevision(
+    workspaceId: string,
+    revision: string,
+  ): Promise<ContentRevisionRecord | null> {
+    return (
+      this.contentRevisions.find(
+        (record) =>
+          record.workspaceId === workspaceId && record.revision === revision,
+      ) ?? null
+    );
+  }
+
   async promoteContentRevision(
     promotion: ContentRevisionPromotion,
   ): Promise<ContentRevisionPromotionResult> {
@@ -1758,6 +1774,17 @@ class MemoryCenterStorage implements CenterStorage {
     }
     record.contentPath = promotion.contentPath;
     record.assetKey = promotion.assetKey;
+    if (promotion.buildRequestId !== undefined) {
+      const buildRequest = this.contentBuildRequests.find(
+        (candidate) =>
+          candidate.workspaceId === promotion.workspaceId &&
+          candidate.buildRequestId === promotion.buildRequestId,
+      );
+      if (buildRequest !== undefined) {
+        buildRequest.status = "completed";
+        buildRequest.completedAt = promotion.promotedAt;
+      }
+    }
     this.currentContentRevision = record.revision;
     return { record, isCurrent: true };
   }

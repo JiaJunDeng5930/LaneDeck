@@ -38,6 +38,8 @@ export interface ContentBuildRequestRecord {
   cwd: string;
   command: string;
   createdAt: string;
+  status: "pending" | "completed";
+  completedAt: string | null;
 }
 
 export interface ContentObjectWrite {
@@ -68,6 +70,7 @@ export interface ContentRevisionPromotion {
   contentPath: string;
   assetKey: string;
   promotedAt: string;
+  buildRequestId?: string;
 }
 
 export interface ContentRevisionPromotionResult {
@@ -89,6 +92,10 @@ export interface CenterStorage {
   saveIngestBatch(batch: IngestBatch, ingestedAt: string): Promise<void>;
   getCurrentState(workspaceId: string): Promise<JsonObject>;
   saveContentSourceRevision(record: ContentRevisionRecord): Promise<void>;
+  getContentRevision(
+    workspaceId: string,
+    revision: string,
+  ): Promise<ContentRevisionRecord | null>;
   promoteContentRevision(
     promotion: ContentRevisionPromotion,
   ): Promise<ContentRevisionPromotionResult>;

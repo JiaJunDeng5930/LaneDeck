@@ -130,6 +130,12 @@ export class WorkspaceService {
     }
 
     const payload = readLocalBuildPayload(request.payload);
+    await this.ensureContentRevisionExists(
+      request.workspaceId,
+      payload.contentRevision,
+      "payload.contentRevision",
+      "invalid_mutation_payload",
+    );
     await this.options.storage.saveMutation(request, mutationId);
     return await this.requestLocalBuild(
       request.workspaceId,
@@ -146,6 +152,15 @@ export class WorkspaceService {
       request.buildRequestId,
     );
     validateBuildCompletionIdentity(request, buildRequest);
+    if (buildRequest?.status === "completed") {
+      return await this.duplicateBuildCompletion(request);
+    }
+    await this.ensureContentRevisionExists(
+      request.workspaceId,
+      request.contentRevision,
+      "contentRevision",
+      "invalid_content_build_completion",
+    );
 
     const objectKeys =
       await this.options.contentStore.writeContentBuildArtifacts({
@@ -160,6 +175,7 @@ export class WorkspaceService {
         contentPath: request.entrypoint,
         assetKey: objectKeys.entrypointKey,
         promotedAt: this.clock(),
+        buildRequestId: request.buildRequestId,
       });
 
     if (isCurrent) {
@@ -304,6 +320,8 @@ export class WorkspaceService {
       cwd: payload.cwd,
       command: payload.command,
       createdAt: this.clock(),
+      status: "pending",
+      completedAt: null,
     });
     const delivered = this.options.live.sendToMachineAgent(payload.machineId, {
       type: "build_content",
@@ -319,6 +337,51 @@ export class WorkspaceService {
       mutationId,
       buildRequestId,
       diagnostics: deliveryDiagnostics(delivered, "build_content"),
+    };
+  }
+
+  private async ensureContentRevisionExists(
+    workspaceId: string,
+    revision: string,
+    path: string,
+    code: string,
+  ): Promise<void> {
+    const record = await this.options.storage.getContentRevision(
+      workspaceId,
+      revision,
+    );
+    if (record !== null) {
+      return;
+    }
+
+    throw badRequest(code, path, "expected existing content revision");
+  }
+
+  private async duplicateBuildCompletion(
+    request: ContentBuildCompleteRequest,
+  ): Promise<MutationResult> {
+    const record = await this.options.storage.getContentRevision(
+      request.workspaceId,
+      request.contentRevision,
+    );
+    if (record === null) {
+      throw badRequest(
+        "invalid_content_build_completion",
+        "contentRevision",
+        "expected existing content revision",
+      );
+    }
+
+    return {
+      mutation: "patch_content",
+      mutationId: record.mutationId,
+      contentRevision: record.revision,
+      diagnostics: [
+        {
+          path: "buildRequestId",
+          message: "content build request already completed",
+        },
+      ],
     };
   }
 }
@@ -424,7 +487,9 @@ function validateBuildCompletionIdentity(
   request: ContentBuildCompleteRequest,
   buildRequest: {
     machineId: string;
+    contentId: string;
     contentRevision: string;
+    status: "pending" | "completed";
   } | null,
 ): void {
   if (buildRequest === null) {
@@ -440,6 +505,14 @@ function validateBuildCompletionIdentity(
       "invalid_content_build_completion",
       "machineId",
       "expected build request machine id",
+    );
+  }
+
+  if (buildRequest.contentId !== request.contentId) {
+    throw badRequest(
+      "invalid_content_build_completion",
+      "contentId",
+      "expected build request content id",
     );
   }
 

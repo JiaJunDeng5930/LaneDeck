@@ -38,6 +38,17 @@ export class R2ContentStore {
       body: artifact.body,
       contentType: artifact.contentType,
     }));
+    const artifactPaths = new Set<string>();
+    artifacts.forEach((artifact, index) => {
+      if (artifactPaths.has(artifact.path)) {
+        throw badRequest(
+          "invalid_content_build_payload",
+          `artifacts.${index}.path`,
+          "expected unique artifact path",
+        );
+      }
+      artifactPaths.add(artifact.path);
+    });
 
     if (!artifacts.some((artifact) => artifact.path === entrypoint)) {
       throw badRequest(

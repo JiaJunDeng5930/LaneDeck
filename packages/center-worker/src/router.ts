@@ -225,6 +225,7 @@ function validateContentBuildCompleteRequest(
 ): void {
   requireNonEmptyContentBuildField(completion.machineId, "machineId");
   requireNonEmptyContentBuildField(completion.buildRequestId, "buildRequestId");
+  requireNonEmptyContentBuildField(completion.contentId, "contentId");
   requireNonEmptyContentBuildField(
     completion.contentRevision,
     "contentRevision",
