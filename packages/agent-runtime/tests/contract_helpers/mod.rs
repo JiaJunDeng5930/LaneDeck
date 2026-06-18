@@ -488,6 +488,7 @@ pub struct CenterProbe {
 struct CenterProbeState {
     outcome: CenterPostOutcome,
     posted_batches: Vec<IngestBatch>,
+    control_connect_requests: Vec<ControlConnectRequest>,
 }
 
 #[derive(Clone)]
@@ -532,12 +533,17 @@ impl CenterProbe {
             inner: Arc::new(Mutex::new(CenterProbeState {
                 outcome,
                 posted_batches: Vec::new(),
+                control_connect_requests: Vec::new(),
             })),
         }
     }
 
     pub fn posted_batches(&self) -> Vec<IngestBatch> {
         self.inner.lock().unwrap().posted_batches.clone()
+    }
+
+    pub fn control_connect_requests(&self) -> Vec<ControlConnectRequest> {
+        self.inner.lock().unwrap().control_connect_requests.clone()
     }
 }
 
@@ -591,9 +597,16 @@ impl CenterClient for CenterProbe {
 
     async fn connect_control(
         &self,
-        _request: ControlConnectRequest,
+        request: ControlConnectRequest,
     ) -> Result<ControlSession, AgentError> {
-        unimplemented!("control session transport sits outside these contracts")
+        self.inner
+            .lock()
+            .unwrap()
+            .control_connect_requests
+            .push(request);
+        Ok(ControlSession {
+            connected_at: instant(1_700_000_000),
+        })
     }
 }
 
@@ -613,6 +626,8 @@ struct SpoolProbeState {
     rejected_ids: Vec<SpoolEntryId>,
     rejected_diagnostics: Vec<Diagnostic>,
     enqueue_failures_remaining: usize,
+    control_completion_failures_remaining: usize,
+    runtime_seed_sequence: u64,
 }
 
 impl SpoolProbe {
@@ -629,6 +644,15 @@ impl SpoolProbe {
         Self {
             inner: Arc::new(Mutex::new(SpoolProbeState {
                 enqueue_failures_remaining: 1,
+                ..SpoolProbeState::default()
+            })),
+        }
+    }
+
+    pub fn fail_next_control_completion() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SpoolProbeState {
+                control_completion_failures_remaining: 1,
                 ..SpoolProbeState::default()
             })),
         }
@@ -697,6 +721,19 @@ impl LocalSpool for SpoolProbe {
             .unwrap_or(1))
     }
 
+    fn allocate_runtime_seed(
+        &mut self,
+        workspace_id: &str,
+        machine_id: &str,
+    ) -> Result<String, AgentError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.runtime_seed_sequence += 1;
+        Ok(format!(
+            "runtime-{workspace_id}-{machine_id}-{}",
+            inner.runtime_seed_sequence
+        ))
+    }
+
     fn load_control_message(
         &mut self,
         message_id: &ControlMessageId,
@@ -727,9 +764,12 @@ impl LocalSpool for SpoolProbe {
         message_id: ControlMessageId,
         result: Result<lanedeck_agent_runtime::ControlReply, AgentError>,
     ) -> Result<(), AgentError> {
-        self.inner
-            .lock()
-            .unwrap()
+        let mut inner = self.inner.lock().unwrap();
+        if inner.control_completion_failures_remaining > 0 {
+            inner.control_completion_failures_remaining -= 1;
+            return Err(AgentError::spool("control completion failed"));
+        }
+        inner
             .control_messages
             .insert(message_id, ControlMessageRecord::Completed(result));
         Ok(())

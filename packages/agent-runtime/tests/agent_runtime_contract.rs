@@ -44,6 +44,24 @@ async fn produced_lane_batch_is_enqueued_before_upload() {
 }
 
 #[tokio::test]
+async fn connect_control_uses_configured_control_url() {
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(Vec::new());
+    let service =
+        AgentService::new(script_lane_agent_config(), center.clone(), spool, runner).unwrap();
+
+    let session = service.connect_control().await.unwrap();
+    let requests = center.control_connect_requests();
+
+    assert_eq!(session.connected_at, instant(1_700_000_000));
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].workspace_id, "workspace.local");
+    assert_eq!(requests[0].machine_id, "machine.local");
+    assert_eq!(requests[0].url, "wss://center.local/agent/control");
+}
+
+#[tokio::test]
 async fn spool_enqueue_failure_retains_closed_frames_for_next_run() {
     let first = instant(1_700_010_500);
     let second = instant(1_700_010_501);
@@ -83,8 +101,7 @@ async fn spool_enqueue_failure_retains_closed_frames_for_next_run() {
 #[tokio::test]
 async fn batch_ids_include_restart_safe_runtime_prefix() {
     let now = instant(1_700_010_800);
-    let first_spool = SpoolProbe::default();
-    let second_spool = SpoolProbe::default();
+    let spool = SpoolProbe::default();
     let first_runner =
         ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:first", now)]);
     let second_runner =
@@ -92,14 +109,14 @@ async fn batch_ids_include_restart_safe_runtime_prefix() {
     let mut first_service = AgentService::new(
         script_lane_agent_config(),
         CenterProbe::accepting(),
-        first_spool.clone(),
+        spool.clone(),
         first_runner,
     )
     .unwrap();
     let mut second_service = AgentService::new(
         script_lane_agent_config(),
         CenterProbe::accepting(),
-        second_spool.clone(),
+        spool.clone(),
         second_runner,
     )
     .unwrap();
@@ -107,8 +124,9 @@ async fn batch_ids_include_restart_safe_runtime_prefix() {
     first_service.run_once(now).await.unwrap();
     second_service.run_once(now).await.unwrap();
 
-    let first_batch_id = first_spool.enqueued_batches()[0].batch_id.clone();
-    let second_batch_id = second_spool.enqueued_batches()[0].batch_id.clone();
+    let batches = spool.enqueued_batches();
+    let first_batch_id = batches[0].batch_id.clone();
+    let second_batch_id = batches[1].batch_id.clone();
     let first_prefix = restart_prefix(&first_batch_id);
     let second_prefix = restart_prefix(&second_batch_id);
 
@@ -562,6 +580,37 @@ async fn reload_lane_config_rejects_unknown_lane_and_keeps_existing_schedule() {
 }
 
 #[tokio::test]
+async fn reload_invalid_frame_settings_are_config_errors_and_keep_active_lane() {
+    let now = instant(1_700_013_900);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+    let mut bad_lane = reloaded_script_lane_config();
+    bad_lane.raw_stage.settings["frame"]["maxSeconds"] = json!(0);
+
+    let error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-invalid-frame",
+            bad_lane,
+        ))
+        .await
+        .unwrap_err();
+    service.run_once(now).await.unwrap();
+    let requests = runner.requests();
+
+    match error {
+        AgentError::Config(message) => {
+            assert!(message.contains("rawStage.settings.frame.maxSeconds"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].cwd, "/var/lib/lanedeck/sources/cpu");
+}
+
+#[tokio::test]
 async fn build_content_control_message_calls_content_build_handler() {
     let now = instant(1_700_014_000);
     let center = CenterProbe::accepting();
@@ -660,6 +709,45 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
         spool.control_message_record("control-apply-duplicate"),
         Some(ControlMessageRecord::Completed(Ok(first_apply)))
     );
+}
+
+#[tokio::test]
+async fn control_completion_persist_failure_keeps_replay_path() {
+    let now = instant(1_700_014_150);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::fail_next_control_completion();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let first_error = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-completion-failure",
+            "dashboard-main",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap_err();
+    let replay = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-completion-failure",
+            "dashboard-main",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap();
+
+    match first_error {
+        AgentError::Spool(message) => assert!(message.contains("control completion failed")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        replay,
+        ControlReply::accepted("control-build-completion-failure", "build_content")
+    );
+    assert_eq!(runner.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -853,6 +941,29 @@ fn startup_rejects_zero_schedule_interval_seconds() {
 
     assert!(message.contains("lane.cpu"));
     assert!(message.contains("schedule.intervalSeconds"));
+}
+
+#[test]
+fn startup_invalid_frame_settings_are_config_errors() {
+    let mut config = script_lane_agent_config();
+    config.lanes[0].config.raw_stage.settings["frame"]["maxSeconds"] = json!(0);
+
+    let error = match AgentService::new(
+        config,
+        CenterProbe::accepting(),
+        SpoolProbe::default(),
+        ScriptRunnerProbe::with_outputs(Vec::new()),
+    ) {
+        Ok(_) => panic!("expected config error"),
+        Err(error) => error,
+    };
+
+    match error {
+        AgentError::Config(message) => {
+            assert!(message.contains("rawStage.settings.frame.maxSeconds"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
