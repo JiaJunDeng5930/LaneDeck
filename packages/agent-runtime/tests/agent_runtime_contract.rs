@@ -671,7 +671,9 @@ async fn build_content_control_message_calls_content_build_handler() {
     let reply = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-main",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -689,6 +691,34 @@ async fn build_content_control_message_calls_content_build_handler() {
         request.command,
         "corepack pnpm --filter @lanedeck/content build"
     );
+}
+
+#[tokio::test]
+async fn build_content_control_message_rejects_other_machine() {
+    let now = instant(1_700_014_010);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let error = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-wrong-machine",
+            "machine.other",
+            "dashboard-main",
+            "revision-1",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap_err();
+
+    match error {
+        AgentError::Config(message) => assert!(message.contains("machineId")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(runner.requests().is_empty());
 }
 
 #[tokio::test]
@@ -711,7 +741,9 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
     let first_build = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-duplicate",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -720,7 +752,9 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
     let second_build = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-duplicate",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -777,7 +811,9 @@ async fn control_completion_persist_failure_keeps_replay_path() {
     let first_error = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-completion-failure",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -786,7 +822,9 @@ async fn control_completion_persist_failure_keeps_replay_path() {
     let replay = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-completion-failure",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -855,7 +893,9 @@ async fn in_progress_control_message_blocks_duplicate_side_effect_execution() {
     let error = service
         .handle_control_message(ControlMessage::build_content(
             "control-build-in-progress",
+            "machine.local",
             "dashboard-main",
+            "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
         ))
@@ -874,7 +914,9 @@ fn control_messages_accept_camel_case_protocol_fields() {
     let message: ControlMessage = serde_json::from_value(json!({
         "type": "build_content",
         "messageId": "control-build-json",
+        "machineId": "machine.local",
         "contentId": "dashboard-main",
+        "contentRevision": "revision-1",
         "cwd": "/var/lib/lanedeck/content",
         "command": "build-content"
     }))
@@ -883,12 +925,16 @@ fn control_messages_accept_camel_case_protocol_fields() {
     match message {
         ControlMessage::BuildContent {
             message_id,
+            machine_id,
             content_id,
+            content_revision,
             cwd,
             command,
         } => {
             assert_eq!(message_id.as_str(), "control-build-json");
+            assert_eq!(machine_id, "machine.local");
             assert_eq!(content_id, "dashboard-main");
+            assert_eq!(content_revision, "revision-1");
             assert_eq!(cwd, content_root());
             assert_eq!(command, "build-content");
         }
