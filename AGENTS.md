@@ -43,6 +43,7 @@ E2E tests compose the packages at runtime and introduce no package dependency.
 ## Review And Contract Rules
 
 - Cross-cutting contracts live in `design/02-cross-cutting-contracts.md`.
+- Treat every review finding as a problem-surface signal. Before rerunning review, sweep the related contract, design, test, and implementation surface and commit the full surface fix.
 - If one branch exceeds three review rounds, classify review findings against cross-cutting contracts before further implementation.
 - Missing or ambiguous contracts are fixed in design first, then in tests and implementation.
 - Package tests and package implementation are separate tasks and should be delegated to different subagents.
