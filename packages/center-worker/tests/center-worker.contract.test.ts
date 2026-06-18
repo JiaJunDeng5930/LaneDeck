@@ -783,6 +783,58 @@ describe("center-worker contract", () => {
     );
   });
 
+  it("POST /api/content/build-complete rejects mismatched build identity before promotion", async () => {
+    const harness = createHarness();
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>pending</main>",
+      },
+    });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: {
+        machineId: "machine.expected",
+        contentId: "content.home",
+        contentRevision: "id-2",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
+
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/content/build-complete",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.other",
+          buildRequestId: "id-4",
+          contentRevision: "id-2",
+          entrypoint: "index.html",
+          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_build_completion",
+      diagnostics: [expect.objectContaining({ path: "machineId" })],
+    });
+    await expect(
+      harness.storage.getCurrentContent("workspace.local"),
+    ).resolves.toBeNull();
+    expect(browser.decodedMessages()).toEqual([]);
+  });
+
   it("historical content build completion skips live broadcast and reports current diagnostic", async () => {
     const harness = createHarness(new SupersededStorage());
     const browser = new RecordingSocket();
