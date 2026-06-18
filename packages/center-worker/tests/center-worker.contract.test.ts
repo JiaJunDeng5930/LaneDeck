@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "../src/errors";
 import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
 import { handleRequest } from "../src/router";
 import { rewriteViteAssetReferences } from "../src/storage/r2";
@@ -1286,9 +1287,25 @@ function createHarness(storage = new MemoryCenterStorage()) {
           workspace.query(request),
         mutate: (request: Parameters<WorkspaceService["mutate"]>[0]) =>
           workspace.mutate(request),
-        buildComplete: (
+        buildComplete: async (
           request: Parameters<WorkspaceService["buildComplete"]>[0],
-        ) => workspace.buildComplete(request),
+        ) => {
+          try {
+            return { ok: true, value: await workspace.buildComplete(request) };
+          } catch (error) {
+            if (error instanceof ApiError) {
+              return {
+                ok: false,
+                error: {
+                  status: error.status,
+                  code: error.code,
+                  diagnostics: error.diagnostics,
+                },
+              };
+            }
+            throw error;
+          }
+        },
         connectAgent: async () => new Response(null, { status: 204 }),
         connectBrowser: async () => new Response(null, { status: 204 }),
         fetch: async () => new Response(null, { status: 204 }),
