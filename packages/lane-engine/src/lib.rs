@@ -69,6 +69,7 @@ pub struct LaneEngine<S, R> {
 
 #[derive(Debug, Clone, PartialEq)]
 struct PendingRawClose {
+    config: LaneConfig,
     trigger_kind: TriggerKind,
     closed_at: DateTime<Utc>,
     raw_frame: Option<Frame>,
@@ -82,8 +83,9 @@ struct PendingRawClose {
 }
 
 impl PendingRawClose {
-    fn new(trigger_kind: TriggerKind, closed_at: DateTime<Utc>) -> Self {
+    fn new(config: LaneConfig, trigger_kind: TriggerKind, closed_at: DateTime<Utc>) -> Self {
         Self {
+            config,
             trigger_kind,
             closed_at,
             raw_frame: None,
@@ -137,6 +139,15 @@ where
         self.max_seconds = max_seconds;
 
         Ok(())
+    }
+
+    pub fn has_pending_close(&self) -> bool {
+        self.pending_raw_close.is_some()
+    }
+
+    pub fn retry_pending_close(&mut self) -> Result<Vec<EngineEffect>, EngineError> {
+        self.retry_pending_raw_close()?;
+        Ok(self.drain_effects())
     }
 }
 
@@ -242,7 +253,11 @@ where
         closed_at: DateTime<Utc>,
     ) -> Result<(), EngineError> {
         if self.pending_raw_close.is_none() {
-            self.pending_raw_close = Some(PendingRawClose::new(trigger_kind, closed_at));
+            self.pending_raw_close = Some(PendingRawClose::new(
+                self.config.clone(),
+                trigger_kind,
+                closed_at,
+            ));
         }
         self.retry_pending_raw_close()
     }
@@ -276,8 +291,14 @@ where
             .as_ref()
             .is_some_and(|pending| pending.metric_frame.is_none())
         {
+            let config = self
+                .pending_raw_close
+                .as_ref()
+                .expect("pending close exists")
+                .config
+                .clone();
             let (metric_frame, diagnostics) =
-                self.build_stage_frame(raw_frame.clone(), StageKind::Metric, closed_at)?;
+                self.build_stage_frame(&config, raw_frame.clone(), StageKind::Metric, closed_at)?;
             let pending = self
                 .pending_raw_close
                 .as_mut()
@@ -321,8 +342,14 @@ where
             .as_ref()
             .is_some_and(|pending| pending.event_frame.is_none())
         {
+            let config = self
+                .pending_raw_close
+                .as_ref()
+                .expect("pending close exists")
+                .config
+                .clone();
             let (event_frame, diagnostics) =
-                self.build_stage_frame(metric_frame.clone(), StageKind::Event, closed_at)?;
+                self.build_stage_frame(&config, metric_frame.clone(), StageKind::Event, closed_at)?;
             let pending = self
                 .pending_raw_close
                 .as_mut()
@@ -380,7 +407,7 @@ where
 
         let opened_at = self.raw_opened_at.unwrap_or(pending.closed_at);
         pending.raw_frame = Some(Frame {
-            lane_id: self.config.lane_id.clone(),
+            lane_id: pending.config.lane_id.clone(),
             stage: StageKind::Raw,
             frame_no: self.next_frame_no,
             opened_at,
@@ -399,21 +426,22 @@ where
         now: DateTime<Utc>,
     ) -> Result<Frame, EngineError> {
         let (frame, diagnostics) =
-            self.build_stage_frame(upstream_frame, target_stage.clone(), now)?;
+            self.build_stage_frame(&self.config, upstream_frame, target_stage.clone(), now)?;
         self.push_success_diagnostics(&target_stage, &diagnostics);
         Ok(frame)
     }
 
     fn build_stage_frame(
         &self,
+        config: &LaneConfig,
         upstream_frame: Frame,
         target_stage: StageKind,
         now: DateTime<Utc>,
     ) -> Result<(Frame, Vec<Diagnostic>), EngineError> {
         let mode = match target_stage {
             StageKind::Raw => StageMode::Builtin,
-            StageKind::Metric => self.config.metric_stage.mode.clone(),
-            StageKind::Event => self.config.event_stage.mode.clone(),
+            StageKind::Metric => config.metric_stage.mode.clone(),
+            StageKind::Event => config.event_stage.mode.clone(),
         };
 
         let (records, diagnostics) = match mode {
@@ -429,14 +457,14 @@ where
                 let history = self.store.load_history(HistoryRequest {
                     lane_id: self.config.lane_id.clone(),
                     stage: target_stage.clone(),
-                    upstream_frames: history_window(&self.config, &target_stage, "upstreamFrames"),
-                    metric_frames: history_window(&self.config, &target_stage, "metricFrames"),
-                    event_frames: history_window(&self.config, &target_stage, "eventFrames"),
+                    upstream_frames: history_window(config, &target_stage, "upstreamFrames"),
+                    metric_frames: history_window(config, &target_stage, "metricFrames"),
+                    event_frames: history_window(config, &target_stage, "eventFrames"),
                 })?;
                 let result = self.runner.run_stage(StageInvocation {
                     current_frame: upstream_frame.clone(),
                     history,
-                    lane: self.config.clone(),
+                    lane: config.clone(),
                     now,
                 })?;
                 (result.records, result.diagnostics)

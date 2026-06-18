@@ -9,15 +9,15 @@ use lanedeck_lane_engine::{
     EngineEffect, EngineError, HistoryRequest, HistoryStore, LaneEngine, StageRunner,
 };
 use lanedeck_protocol::{
-    Diagnostic, Frame, IngestAck, IngestBatch, LaneConfig, StageHistory, StageInvocation,
-    StageKind, StageMode, StageResult,
+    Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig, StageHistory,
+    StageInvocation, StageKind, StageMode, StageResult,
 };
 use serde_json::Value;
 
 use crate::{
     AgentConfig, AgentError, AgentRunReport, CenterClient, ControlMessage, ControlReply,
-    FlushReport, LocalSpool, RetryReason, ScriptPurpose, ScriptRunOutput, ScriptRunRequest,
-    ScriptRunner, ScriptSideEffectPolicy,
+    FlushReport, LocalSpool, RetryReason, ScriptPurpose, ScriptRunRequest, ScriptRunner,
+    ScriptSideEffectPolicy,
 };
 
 const BUILD_CONTENT_TIMEOUT_SECONDS: i64 = 300;
@@ -40,6 +40,7 @@ struct LaneRuntime<R> {
     lane: LaneConfig,
     schedule_interval: Duration,
     next_run_at: Option<DateTime<Utc>>,
+    pending_source_records: VecDeque<FrameRecord>,
     history_store: ServiceHistoryStore,
     engine: LaneEngine<ServiceHistoryStore, ServiceStageRunner<R>>,
 }
@@ -134,6 +135,46 @@ where
             }
             report.lane_execution_count += 1;
 
+            let pending_close_report = {
+                let lane = &mut self.lanes[lane_index];
+                retry_pending_close(lane)
+            };
+            if let Some(error) = pending_close_report.error {
+                report
+                    .diagnostics
+                    .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                self.lanes[lane_index].mark_run(now);
+                continue;
+            }
+            self.apply_pipeline_effects(pending_close_report.effects, &mut report)?;
+
+            if self.lanes[lane_index].pending_source_records.is_empty() {
+                let request = match collect_source_request(&self.lanes[lane_index].lane) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        report
+                            .diagnostics
+                            .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                        self.lanes[lane_index].mark_run(now);
+                        continue;
+                    }
+                };
+                let output = match self.runner.run_script(request) {
+                    Ok(output) => output,
+                    Err(error) => {
+                        report
+                            .diagnostics
+                            .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                        self.lanes[lane_index].mark_run(now);
+                        continue;
+                    }
+                };
+                report.diagnostics.extend(output.diagnostics.clone());
+                self.lanes[lane_index]
+                    .pending_source_records
+                    .extend(output.records);
+            }
+
             let opening_report = {
                 let lane = &mut self.lanes[lane_index];
                 open_lane_window(lane, now)
@@ -147,31 +188,9 @@ where
             }
             self.apply_pipeline_effects(opening_report.effects, &mut report)?;
 
-            let request = match collect_source_request(&self.lanes[lane_index].lane) {
-                Ok(request) => request,
-                Err(error) => {
-                    report
-                        .diagnostics
-                        .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
-                    self.lanes[lane_index].mark_run(now);
-                    continue;
-                }
-            };
-            let output = match self.runner.run_script(request) {
-                Ok(output) => output,
-                Err(error) => {
-                    report
-                        .diagnostics
-                        .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
-                    self.lanes[lane_index].mark_run(now);
-                    continue;
-                }
-            };
-            report.diagnostics.extend(output.diagnostics.clone());
-
             let pipeline_report = {
                 let lane = &mut self.lanes[lane_index];
-                run_lane_pipeline_after_source(lane, output, now)
+                drain_pending_source_records(lane, now)
             };
             self.lanes[lane_index].mark_run(now);
             if let Some(error) = pipeline_report.error {
@@ -192,17 +211,34 @@ where
         for entry in entries {
             let id = entry.id.clone();
             match self.center.post_ingest_batch(entry.batch.clone()).await {
-                Ok(ack) if ack_is_complete(&ack, &entry.batch) => {
-                    self.spool.mark_acked(std::slice::from_ref(&id))?;
-                    report.uploaded_batch_count += 1;
-                    report.acked_entry_count += 1;
-                }
                 Ok(ack) if ack.batch_id != entry.batch.batch_id => {
                     self.spool.mark_retry(
                         std::slice::from_ref(&id),
                         ack_identity_retry_reason(&ack, &entry.batch),
                     )?;
                     report.retry_entry_count += 1;
+                }
+                Ok(ack) if ack_accepted_count_exceeds_batch(&ack, &entry.batch) => {
+                    self.spool.mark_retry(
+                        std::slice::from_ref(&id),
+                        ack_overcount_retry_reason(&ack, &entry.batch),
+                    )?;
+                    report.retry_entry_count += 1;
+                }
+                Ok(ack) if ack_is_fully_accepted(&ack, &entry.batch) => {
+                    self.spool.mark_acked(std::slice::from_ref(&id))?;
+                    report.uploaded_batch_count += 1;
+                    report.acked_entry_count += 1;
+                    report.diagnostics.extend(ack.diagnostics);
+                }
+                Ok(ack) if ack_is_partially_accepted(&ack, &entry.batch) => {
+                    let diagnostics = ack_rejection_diagnostics(&ack, &entry.batch);
+                    self.spool.mark_retry(
+                        std::slice::from_ref(&id),
+                        ack_partial_retry_reason(&ack, &entry.batch),
+                    )?;
+                    report.retry_entry_count += 1;
+                    report.diagnostics.extend(diagnostics);
                 }
                 Ok(ack) => {
                     self.spool.mark_rejected(
@@ -361,10 +397,18 @@ where
     }
 }
 
-fn ack_is_complete(ack: &IngestAck, batch: &IngestBatch) -> bool {
+fn ack_is_fully_accepted(ack: &IngestAck, batch: &IngestBatch) -> bool {
+    ack.batch_id == batch.batch_id && ack.accepted_frame_count as usize == batch.frames.len()
+}
+
+fn ack_accepted_count_exceeds_batch(ack: &IngestAck, batch: &IngestBatch) -> bool {
+    ack.batch_id == batch.batch_id && ack.accepted_frame_count as usize > batch.frames.len()
+}
+
+fn ack_is_partially_accepted(ack: &IngestAck, batch: &IngestBatch) -> bool {
     ack.batch_id == batch.batch_id
-        && ack.accepted_frame_count as usize == batch.frames.len()
-        && ack.diagnostics.is_empty()
+        && ack.accepted_frame_count > 0
+        && (ack.accepted_frame_count as usize) < batch.frames.len()
 }
 
 fn ack_rejection_diagnostics(ack: &IngestAck, batch: &IngestBatch) -> Vec<Diagnostic> {
@@ -387,6 +431,24 @@ fn ack_identity_retry_reason(ack: &IngestAck, batch: &IngestBatch) -> RetryReaso
     RetryReason::network(format!(
         "center ack batch id {} did not match spool batch id {}",
         ack.batch_id, batch.batch_id
+    ))
+}
+
+fn ack_overcount_retry_reason(ack: &IngestAck, batch: &IngestBatch) -> RetryReason {
+    RetryReason::network(format!(
+        "center accepted {}/{} frames for batch {}",
+        ack.accepted_frame_count,
+        batch.frames.len(),
+        batch.batch_id
+    ))
+}
+
+fn ack_partial_retry_reason(ack: &IngestAck, batch: &IngestBatch) -> RetryReason {
+    RetryReason::network(format!(
+        "center partially accepted {}/{} frames for batch {} without frame-level outcomes",
+        ack.accepted_frame_count,
+        batch.frames.len(),
+        batch.batch_id
     ))
 }
 
@@ -420,6 +482,7 @@ where
             lane,
             schedule_interval,
             next_run_at: None,
+            pending_source_records: VecDeque::new(),
             history_store,
             engine,
         })
@@ -635,9 +698,31 @@ where
     }
 }
 
-fn run_lane_pipeline_after_source<R>(
+fn retry_pending_close<R>(lane: &mut LaneRuntime<R>) -> LanePipelineReport
+where
+    R: ScriptRunner,
+{
+    if !lane.engine.has_pending_close() {
+        return LanePipelineReport {
+            effects: Vec::new(),
+            error: None,
+        };
+    }
+
+    match lane.engine.retry_pending_close().map_err(map_engine_error) {
+        Ok(effects) => LanePipelineReport {
+            effects,
+            error: None,
+        },
+        Err(error) => LanePipelineReport {
+            effects: Vec::new(),
+            error: Some(error),
+        },
+    }
+}
+
+fn drain_pending_source_records<R>(
     lane: &mut LaneRuntime<R>,
-    output: ScriptRunOutput,
     now: DateTime<Utc>,
 ) -> LanePipelineReport
 where
@@ -645,7 +730,7 @@ where
 {
     let mut effects = Vec::new();
 
-    for record in output.records {
+    while let Some(record) = lane.pending_source_records.pop_front() {
         match lane
             .engine
             .ingest_raw_record(record, now)

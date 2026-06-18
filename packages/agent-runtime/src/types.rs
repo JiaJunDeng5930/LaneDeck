@@ -181,6 +181,8 @@ pub struct FlushReport {
     pub acked_entry_count: usize,
     pub retry_entry_count: usize,
     pub rejected_entry_count: usize,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
