@@ -317,6 +317,11 @@ where
         self.spool
             .mark_control_message_in_progress(message_id.clone())?;
         let result = self.execute_control_message(message).await;
+        if is_retryable_control_result(&result) {
+            self.spool
+                .release_control_message_in_progress(&message_id)?;
+            return result;
+        }
         self.remember_control_completion(message_id.clone(), result.clone());
         self.spool
             .mark_control_message_completed(message_id, result.clone())?;
@@ -365,6 +370,8 @@ where
                 content_revision,
                 cwd,
                 command,
+                source_path,
+                source,
             } => {
                 validate_build_content_control(
                     &machine_id,
@@ -372,6 +379,8 @@ where
                     &content_revision,
                     &cwd,
                     &command,
+                    &source_path,
+                    &source,
                 )?;
                 if machine_id != self.machine_id {
                     return Err(AgentError::config(format!(
@@ -390,7 +399,9 @@ where
                         "machineId": self.machine_id.clone(),
                         "buildRequestId": build_request_id.clone(),
                         "contentId": content_id.clone(),
-                        "contentRevision": content_revision.clone()
+                        "contentRevision": content_revision.clone(),
+                        "sourcePath": source_path,
+                        "source": source
                     })),
                     timeout: fixed_duration_seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
@@ -1096,6 +1107,8 @@ fn validate_build_content_control(
     content_revision: &str,
     cwd: &Path,
     command: &str,
+    source_path: &str,
+    source: &str,
 ) -> Result<(), AgentError> {
     require_non_empty_control_field("machineId", machine_id)?;
     require_non_empty_control_field("contentId", content_id)?;
@@ -1105,7 +1118,9 @@ fn validate_build_content_control(
             "build_content cwd must be non-empty".to_string(),
         ));
     }
-    require_non_empty_control_field("command", command)
+    require_non_empty_control_field("command", command)?;
+    require_non_empty_control_field("sourcePath", source_path)?;
+    require_non_empty_control_field("source", source)
 }
 
 fn require_non_empty_control_field(field: &str, value: &str) -> Result<(), AgentError> {
@@ -1116,6 +1131,10 @@ fn require_non_empty_control_field(field: &str, value: &str) -> Result<(), Agent
     Err(AgentError::config(format!(
         "build_content {field} must be non-empty"
     )))
+}
+
+fn is_retryable_control_result(result: &Result<ControlReply, AgentError>) -> bool {
+    matches!(result, Err(AgentError::Network(_)))
 }
 
 fn bool_setting(

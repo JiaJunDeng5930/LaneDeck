@@ -200,9 +200,9 @@ describe("center-worker storage contract", () => {
       artifacts: [{ path: "assets/font.woff2", bodyBase64: "AP8B" }],
     });
 
-    expect(bucket.objectBytes("content/revision-binary/assets/font.woff2")).toEqual([
-      0, 255, 1,
-    ]);
+    expect(
+      bucket.objectBytes("content/revision-binary/assets/font.woff2"),
+    ).toEqual([0, 255, 1]);
   });
 
   it("validates every build artifact before writing any R2 object", async () => {
@@ -315,7 +315,9 @@ describe("center-worker storage contract", () => {
       store.writeContentBuildArtifacts({
         revision: "revision-1",
         entrypoint: "index.html",
-        artifacts: [{ path: "assets\\logo.svg", bodyBase64: "PHN2Zz48L3N2Zz4=" }],
+        artifacts: [
+          { path: "assets\\logo.svg", bodyBase64: "PHN2Zz48L3N2Zz4=" },
+        ],
       }),
     ).rejects.toMatchObject({
       code: "invalid_object_path",
@@ -763,27 +765,39 @@ class FakeD1PreparedStatement {
 class FakeR2Bucket {
   private readonly objects = new Map<
     string,
-    { body: string; contentType: string }
+    { body: Uint8Array; contentType: string }
   >();
 
   putObject(key: string, body: string, contentType: string): void {
-    this.objects.set(key, { body, contentType });
+    this.objects.set(key, {
+      body: new TextEncoder().encode(body),
+      contentType,
+    });
   }
 
   async put(
     key: string,
-    body: string,
+    body: string | Uint8Array,
     options?: { httpMetadata?: { contentType?: string } },
   ): Promise<void> {
-    this.putObject(
-      key,
-      body,
-      options?.httpMetadata?.contentType ?? "application/octet-stream",
-    );
+    this.objects.set(key, {
+      body:
+        typeof body === "string"
+          ? new TextEncoder().encode(body)
+          : new Uint8Array(body),
+      contentType:
+        options?.httpMetadata?.contentType ?? "application/octet-stream",
+    });
   }
 
   objectBody(key: string): string | null {
-    return this.objects.get(key)?.body ?? null;
+    const body = this.objects.get(key)?.body;
+    return body === undefined ? null : new TextDecoder().decode(body);
+  }
+
+  objectBytes(key: string): number[] | null {
+    const body = this.objects.get(key)?.body;
+    return body === undefined ? null : [...body];
   }
 
   async get(key: string): Promise<R2ObjectBody | null> {
@@ -795,7 +809,7 @@ class FakeR2Bucket {
     return {
       body: object.body,
       httpMetadata: { contentType: object.contentType },
-      text: async () => object.body,
+      text: async () => new TextDecoder().decode(object.body),
     } as unknown as R2ObjectBody;
   }
 }

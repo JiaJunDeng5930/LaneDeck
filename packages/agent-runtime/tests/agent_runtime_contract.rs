@@ -3,8 +3,9 @@ mod contract_helpers;
 use std::path::PathBuf;
 
 use lanedeck_agent_runtime::{
-    AgentConfig, AgentError, AgentService, ControlMessage, ControlMessageRecord, ControlReply,
-    ScriptPurpose, ScriptRunOutput, ScriptSideEffectPolicy, SpoolEntryId,
+    AgentConfig, AgentError, AgentService, BuildContentControl, ControlMessage,
+    ControlMessageRecord, ControlReply, ScriptPurpose, ScriptRunOutput, ScriptSideEffectPolicy,
+    SpoolEntryId,
 };
 use lanedeck_protocol::{LaneConfig, StageMode};
 use serde_json::json;
@@ -670,16 +671,7 @@ async fn build_content_control_message_calls_content_build_handler() {
         AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
 
     let reply = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-main",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-main"))
         .await
         .unwrap();
 
@@ -710,16 +702,7 @@ async fn build_content_control_message_posts_build_completion() {
     .unwrap();
 
     let reply = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-main",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-main"))
         .await
         .unwrap();
 
@@ -766,16 +749,7 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
     .unwrap();
 
     let error = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-center-failure",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-center-failure"))
         .await
         .unwrap_err();
 
@@ -801,16 +775,7 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
     .unwrap();
 
     let reply = retry_service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-center-failure",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-center-failure"))
         .await
         .unwrap();
 
@@ -832,15 +797,9 @@ async fn build_content_control_message_rejects_other_machine() {
         AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
 
     let error = service
-        .handle_control_message(ControlMessage::build_content(
+        .handle_control_message(build_content_message_with(
             "control-build-wrong-machine",
-            "machine.other",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
+            |message| message.machine_id = "machine.other".to_string(),
         ))
         .await
         .unwrap_err();
@@ -857,94 +816,45 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
     let cases = [
         (
             "machineId",
-            ControlMessage::build_content(
-                "control-build-empty-machine",
-                "",
-                "dashboard-main",
-                "revision-1",
-                content_root(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "src/App.tsx",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-machine", |message| {
+                message.machine_id.clear();
+            }),
         ),
         (
             "contentId",
-            ControlMessage::build_content(
-                "control-build-empty-content",
-                "machine.local",
-                "",
-                "revision-1",
-                content_root(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "src/App.tsx",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-content", |message| {
+                message.content_id.clear();
+            }),
         ),
         (
             "contentRevision",
-            ControlMessage::build_content(
-                "control-build-empty-revision",
-                "machine.local",
-                "dashboard-main",
-                "",
-                content_root(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "src/App.tsx",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-revision", |message| {
+                message.content_revision.clear();
+            }),
         ),
         (
             "cwd",
-            ControlMessage::build_content(
-                "control-build-empty-cwd",
-                "machine.local",
-                "dashboard-main",
-                "revision-1",
-                PathBuf::new(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "src/App.tsx",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-cwd", |message| {
+                message.cwd = PathBuf::new();
+            }),
         ),
         (
             "command",
-            ControlMessage::build_content(
-                "control-build-empty-command",
-                "machine.local",
-                "dashboard-main",
-                "revision-1",
-                content_root(),
-                "",
-                "src/App.tsx",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-command", |message| {
+                message.command.clear();
+            }),
         ),
         (
             "sourcePath",
-            ControlMessage::build_content(
-                "control-build-empty-source-path",
-                "machine.local",
-                "dashboard-main",
-                "revision-1",
-                content_root(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "",
-                "<App />",
-            ),
+            build_content_message_with("control-build-empty-source-path", |message| {
+                message.source_path.clear();
+            }),
         ),
         (
             "source",
-            ControlMessage::build_content(
-                "control-build-empty-source",
-                "machine.local",
-                "dashboard-main",
-                "revision-1",
-                content_root(),
-                "corepack pnpm --filter @lanedeck/content build",
-                "src/App.tsx",
-                "",
-            ),
+            build_content_message_with("control-build-empty-source", |message| {
+                message.source.clear();
+            }),
         ),
     ];
 
@@ -984,29 +894,11 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
     .unwrap();
 
     let first_build = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-duplicate",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-duplicate"))
         .await
         .unwrap();
     let second_build = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-duplicate",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-duplicate"))
         .await
         .unwrap();
     let first_apply = service
@@ -1057,29 +949,11 @@ async fn control_completion_persist_failure_keeps_replay_path() {
     .unwrap();
 
     let first_error = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-completion-failure",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-completion-failure"))
         .await
         .unwrap_err();
     let replay = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-completion-failure",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-completion-failure"))
         .await
         .unwrap();
 
@@ -1143,16 +1017,7 @@ async fn in_progress_control_message_blocks_duplicate_side_effect_execution() {
         AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
 
     let error = service
-        .handle_control_message(ControlMessage::build_content(
-            "control-build-in-progress",
-            "machine.local",
-            "dashboard-main",
-            "revision-1",
-            content_root(),
-            "corepack pnpm --filter @lanedeck/content build",
-            "src/App.tsx",
-            "<App />",
-        ))
+        .handle_control_message(build_content_message("control-build-in-progress"))
         .await
         .unwrap_err();
 
@@ -1172,7 +1037,9 @@ fn control_messages_accept_camel_case_protocol_fields() {
         "contentId": "dashboard-main",
         "contentRevision": "revision-1",
         "cwd": "/var/lib/lanedeck/content",
-        "command": "build-content"
+        "command": "build-content",
+        "sourcePath": "src/App.tsx",
+        "source": "<App />"
     }))
     .unwrap();
 
@@ -1184,6 +1051,8 @@ fn control_messages_accept_camel_case_protocol_fields() {
             content_revision,
             cwd,
             command,
+            source_path,
+            source,
         } => {
             assert_eq!(message_id.as_str(), "control-build-json");
             assert_eq!(machine_id, "machine.local");
@@ -1191,6 +1060,8 @@ fn control_messages_accept_camel_case_protocol_fields() {
             assert_eq!(content_revision, "revision-1");
             assert_eq!(cwd, content_root());
             assert_eq!(command, "build-content");
+            assert_eq!(source_path, "src/App.tsx");
+            assert_eq!(source, "<App />");
         }
         other => panic!("unexpected control message: {other:?}"),
     }
@@ -2141,6 +2012,32 @@ fn new_service_config_message(config: AgentConfig) -> String {
     match result {
         Ok(_) => panic!("expected config error"),
         Err(error) => config_message(error),
+    }
+}
+
+fn build_content_message(message_id: &str) -> ControlMessage {
+    ControlMessage::build_content(build_content_control(message_id))
+}
+
+fn build_content_message_with(
+    message_id: &str,
+    update: impl FnOnce(&mut BuildContentControl),
+) -> ControlMessage {
+    let mut message = build_content_control(message_id);
+    update(&mut message);
+    ControlMessage::build_content(message)
+}
+
+fn build_content_control(message_id: &str) -> BuildContentControl {
+    BuildContentControl {
+        message_id: message_id.into(),
+        machine_id: "machine.local".to_string(),
+        content_id: "dashboard-main".to_string(),
+        content_revision: "revision-1".to_string(),
+        cwd: content_root(),
+        command: "corepack pnpm --filter @lanedeck/content build".to_string(),
+        source_path: "src/App.tsx".to_string(),
+        source: "<App />".to_string(),
     }
 }
 

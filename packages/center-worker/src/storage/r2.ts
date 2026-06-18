@@ -28,6 +28,19 @@ export class R2ContentStore {
     return { sourceKey };
   }
 
+  async readContentSource(sourceKey: string): Promise<string> {
+    const object = await this.bucket.get(sourceKey);
+    if (object === null) {
+      throw badRequest(
+        "missing_content_source",
+        "sourceKey",
+        "expected content source object",
+      );
+    }
+
+    return await object.text();
+  }
+
   async writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
   ): Promise<ContentBuildObjectKeys> {
@@ -35,7 +48,10 @@ export class R2ContentStore {
     const entrypoint = normalizeObjectPath(write.entrypoint, "entrypoint");
     const artifacts = write.artifacts.map((artifact, index) => ({
       path: normalizeObjectPath(artifact.path, `artifacts.${index}.path`),
-      body: artifact.body,
+      body: decodeBase64ArtifactBody(
+        artifact.bodyBase64,
+        `artifacts.${index}.bodyBase64`,
+      ),
       contentType: artifact.contentType,
     }));
     const artifactPaths = new Set<string>();
@@ -110,6 +126,25 @@ export class R2ContentStore {
       headers: { "content-type": contentType },
     });
   }
+}
+
+function decodeBase64ArtifactBody(value: string, path: string): Uint8Array {
+  let decoded: string;
+  try {
+    decoded = atob(value);
+  } catch {
+    throw badRequest(
+      "invalid_content_build_payload",
+      path,
+      "expected base64 artifact body",
+    );
+  }
+
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  return bytes;
 }
 
 export function rewriteViteAssetReferences(

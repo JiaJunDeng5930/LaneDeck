@@ -233,6 +233,8 @@ pub enum ControlMessage {
         content_revision: String,
         cwd: PathBuf,
         command: String,
+        source_path: String,
+        source: String,
     },
     ApplyLocalChange {
         message_id: ControlMessageId,
@@ -246,6 +248,18 @@ pub enum ControlMessage {
         message_id: ControlMessageId,
         message_type: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildContentControl {
+    pub message_id: ControlMessageId,
+    pub machine_id: String,
+    pub content_id: String,
+    pub content_revision: String,
+    pub cwd: PathBuf,
+    pub command: String,
+    pub source_path: String,
+    pub source: String,
 }
 
 impl<'de> Deserialize<'de> for ControlMessage {
@@ -276,6 +290,8 @@ impl<'de> Deserialize<'de> for ControlMessage {
                 content_revision: take_control_field(object, "contentRevision")?,
                 cwd: take_control_field(object, "cwd")?,
                 command: take_control_field(object, "command")?,
+                source_path: take_control_field(object, "sourcePath")?,
+                source: take_control_field(object, "source")?,
             }),
             "apply_local_change" => Ok(Self::ApplyLocalChange {
                 message_id,
@@ -313,21 +329,16 @@ impl ControlMessage {
         }
     }
 
-    pub fn build_content(
-        message_id: impl Into<ControlMessageId>,
-        machine_id: impl Into<String>,
-        content_id: impl Into<String>,
-        content_revision: impl Into<String>,
-        cwd: PathBuf,
-        command: impl Into<String>,
-    ) -> Self {
+    pub fn build_content(message: BuildContentControl) -> Self {
         Self::BuildContent {
-            message_id: message_id.into(),
-            machine_id: machine_id.into(),
-            content_id: content_id.into(),
-            content_revision: content_revision.into(),
-            cwd,
-            command: command.into(),
+            message_id: message.message_id,
+            machine_id: message.machine_id,
+            content_id: message.content_id,
+            content_revision: message.content_revision,
+            cwd: message.cwd,
+            command: message.command,
+            source_path: message.source_path,
+            source: message.source,
         }
     }
 

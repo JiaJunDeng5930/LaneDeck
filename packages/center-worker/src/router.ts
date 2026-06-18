@@ -64,7 +64,9 @@ async function routeRequest(
     const mutation = parseMutationRequest(await readJson(request));
     validateMutationRequestPayload(mutation);
     return jsonResponse(
-      await workspace(env, mutation.workspaceId).mutate(mutation),
+      unwrapWorkspaceRpcResult(
+        await workspace(env, mutation.workspaceId).mutate(mutation),
+      ),
     );
   }
 

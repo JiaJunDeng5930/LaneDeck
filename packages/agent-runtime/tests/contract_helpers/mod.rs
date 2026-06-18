@@ -801,6 +801,20 @@ impl LocalSpool for SpoolProbe {
         Ok(())
     }
 
+    fn release_control_message_in_progress(
+        &mut self,
+        message_id: &ControlMessageId,
+    ) -> Result<(), AgentError> {
+        let mut inner = self.inner.lock().unwrap();
+        if matches!(
+            inner.control_messages.get(message_id),
+            Some(ControlMessageRecord::InProgress)
+        ) {
+            inner.control_messages.remove(message_id);
+        }
+        Ok(())
+    }
+
     fn mark_control_message_completed(
         &mut self,
         message_id: ControlMessageId,

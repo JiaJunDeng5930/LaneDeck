@@ -40,6 +40,11 @@ pub trait LocalSpool {
         message_id: ControlMessageId,
     ) -> Result<(), AgentError>;
 
+    fn release_control_message_in_progress(
+        &mut self,
+        message_id: &ControlMessageId,
+    ) -> Result<(), AgentError>;
+
     fn mark_control_message_completed(
         &mut self,
         message_id: ControlMessageId,

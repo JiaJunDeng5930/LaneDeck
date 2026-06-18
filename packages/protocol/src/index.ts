@@ -117,7 +117,7 @@ export type MutationResult =
 
 export interface ContentBuildArtifact {
   path: string;
-  body: string;
+  bodyBase64: string;
   contentType?: string;
 }
 
@@ -163,6 +163,8 @@ export type AgentControlMessage =
       contentRevision: string;
       cwd: string;
       command: string;
+      sourcePath: string;
+      source: string;
     }
   | {
       type: "apply_local_change";
@@ -351,6 +353,8 @@ export function parseAgentControlMessage(input: unknown): AgentControlMessage {
       ),
       cwd: validator.string(object.cwd, "cwd"),
       command: validator.string(object.command, "command"),
+      sourcePath: validator.string(object.sourcePath, "sourcePath"),
+      source: validator.string(object.source, "source"),
     };
     validator.finish();
     return message;
@@ -392,7 +396,10 @@ function parseContentBuildArtifact(
   const object = validator.object(input, path);
   return {
     path: validator.string(object.path, joinPath(path, "path")),
-    body: validator.string(object.body, joinPath(path, "body")),
+    bodyBase64: validator.string(
+      object.bodyBase64,
+      joinPath(path, "bodyBase64"),
+    ),
     ...(object.contentType === undefined
       ? {}
       : {

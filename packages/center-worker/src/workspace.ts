@@ -18,7 +18,11 @@ import { LiveHub, type LiveSocket } from "./live";
 import { contentRevisionToJson } from "./storage/d1";
 import { normalizeObjectPath } from "./storage/r2";
 
-import type { CenterStorage, ContentObjectStore } from "./storage/types";
+import type {
+  CenterStorage,
+  ContentObjectStore,
+  ContentRevisionRecord,
+} from "./storage/types";
 
 export interface WorkspaceServiceOptions {
   storage: CenterStorage;
@@ -130,17 +134,22 @@ export class WorkspaceService {
     }
 
     const payload = readLocalBuildPayload(request.payload);
-    await this.ensureContentRevisionExists(
+    const sourceRevision = await this.requireContentRevision(
       request.workspaceId,
       payload.contentRevision,
       "payload.contentRevision",
       "invalid_mutation_payload",
+    );
+    const source = await this.options.contentStore.readContentSource(
+      sourceRevision.sourceKey,
     );
     await this.options.storage.saveMutation(request, mutationId);
     return await this.requestLocalBuild(
       request.workspaceId,
       mutationId,
       payload,
+      sourceRevision,
+      source,
     );
   }
 
@@ -155,7 +164,7 @@ export class WorkspaceService {
     if (buildRequest?.status === "completed") {
       return await this.duplicateBuildCompletion(request);
     }
-    await this.ensureContentRevisionExists(
+    await this.requireContentRevision(
       request.workspaceId,
       request.contentRevision,
       "contentRevision",
@@ -308,6 +317,8 @@ export class WorkspaceService {
     workspaceId: string,
     mutationId: string,
     payload: LocalBuildPayload,
+    sourceRevision: ContentRevisionRecord,
+    source: string,
   ): Promise<MutationResult> {
     const buildRequestId = this.idGenerator();
     await this.options.storage.saveContentBuildRequest({
@@ -331,6 +342,8 @@ export class WorkspaceService {
       contentRevision: payload.contentRevision,
       cwd: payload.cwd,
       command: payload.command,
+      sourcePath: sourceRevision.sourcePath,
+      source,
     });
     return {
       mutation: "request_local_build",
@@ -340,18 +353,18 @@ export class WorkspaceService {
     };
   }
 
-  private async ensureContentRevisionExists(
+  private async requireContentRevision(
     workspaceId: string,
     revision: string,
     path: string,
     code: string,
-  ): Promise<void> {
+  ): Promise<ContentRevisionRecord> {
     const record = await this.options.storage.getContentRevision(
       workspaceId,
       revision,
     );
     if (record !== null) {
-      return;
+      return record;
     }
 
     throw badRequest(code, path, "expected existing content revision");

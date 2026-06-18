@@ -26,7 +26,7 @@ export type WorkspaceRpcResult<T> =
 export interface WorkspaceCoordinatorRpc {
   ingest(batch: IngestBatch): Promise<IngestAck>;
   query(request: QueryRequest): Promise<QueryResponse>;
-  mutate(request: MutationRequest): Promise<MutationResult>;
+  mutate(request: MutationRequest): Promise<WorkspaceRpcResult<MutationResult>>;
   buildComplete(
     request: ContentBuildCompleteRequest,
   ): Promise<WorkspaceRpcResult<MutationResult>>;

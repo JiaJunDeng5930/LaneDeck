@@ -46,8 +46,10 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     return await this.service.query(request);
   }
 
-  async mutate(request: MutationRequest): Promise<MutationResult> {
-    return await this.service.mutate(request);
+  async mutate(
+    request: MutationRequest,
+  ): Promise<WorkspaceRpcResult<MutationResult>> {
+    return await rpcResult(() => this.service.mutate(request));
   }
 
   async buildComplete(

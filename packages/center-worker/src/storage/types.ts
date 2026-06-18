@@ -82,6 +82,7 @@ export interface ContentObjectStore {
   writeContentSource(
     write: ContentObjectWrite,
   ): Promise<ContentSourceObjectKeys>;
+  readContentSource(sourceKey: string): Promise<string>;
   writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
   ): Promise<ContentBuildObjectKeys>;

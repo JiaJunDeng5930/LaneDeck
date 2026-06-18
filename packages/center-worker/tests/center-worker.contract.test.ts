@@ -1639,8 +1639,23 @@ function createHarness(storage = new MemoryCenterStorage()) {
         ingest: (batch: IngestBatch) => workspace.ingest(batch),
         query: (request: Parameters<WorkspaceService["query"]>[0]) =>
           workspace.query(request),
-        mutate: (request: Parameters<WorkspaceService["mutate"]>[0]) =>
-          workspace.mutate(request),
+        mutate: async (request: Parameters<WorkspaceService["mutate"]>[0]) => {
+          try {
+            return { ok: true, value: await workspace.mutate(request) };
+          } catch (error) {
+            if (error instanceof ApiError) {
+              return {
+                ok: false,
+                error: {
+                  status: error.status,
+                  code: error.code,
+                  diagnostics: error.diagnostics,
+                },
+              };
+            }
+            throw error;
+          }
+        },
         buildComplete: async (
           request: Parameters<WorkspaceService["buildComplete"]>[0],
         ) => {
@@ -1740,6 +1755,16 @@ class MemoryContentObjectStore implements ContentObjectStore {
     return { sourceKey };
   }
 
+  async readContentSource(sourceKey: string): Promise<string> {
+    const source = this.writes.get(sourceKey);
+    if (source === undefined) {
+      throw new ApiError(400, "missing_content_source", [
+        { path: "sourceKey", message: "expected content source object" },
+      ]);
+    }
+    return source;
+  }
+
   async writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
   ): Promise<ContentBuildObjectKeys> {
@@ -1748,7 +1773,7 @@ class MemoryContentObjectStore implements ContentObjectStore {
     let entrypointKey = "";
     for (const artifact of write.artifacts) {
       const key = ["content", write.revision, artifact.path].join("/");
-      this.writes.set(key, artifact.body);
+      this.writes.set(key, atob(artifact.bodyBase64));
       assetKeys.push(key);
       if (artifact.path === write.entrypoint) {
         entrypointKey = key;

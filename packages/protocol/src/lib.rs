@@ -98,7 +98,7 @@ pub struct IngestAck {
 #[serde(rename_all = "camelCase")]
 pub struct ContentBuildArtifact {
     pub path: String,
-    pub body: String,
+    pub body_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
 }
