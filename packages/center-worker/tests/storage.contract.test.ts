@@ -10,6 +10,20 @@ import type {
 } from "../src/storage/types";
 
 describe("center-worker storage contract", () => {
+  it("initializes an index for current state frame reads", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.initialize();
+
+    const indexSql = db.executedSql.find((sql) =>
+      sql.includes("frames_current_state_idx"),
+    );
+    expect(indexSql).toContain(
+      "(workspace_id, closed_at_epoch_ms DESC, batch_id DESC, lane_id ASC, machine_id ASC, stage ASC, frame_no ASC)",
+    );
+  });
+
   it("keeps current content pointer on the newest mutation sequence", async () => {
     const db = new FakeD1Database();
     const storage = new D1CenterStorage(db as unknown as D1Database);
@@ -544,6 +558,7 @@ interface FrameRow {
 }
 
 class FakeD1Database {
+  readonly executedSql: string[] = [];
   readonly contentRevisions = new Map<string, ContentRevisionRow>();
   readonly laneRevisions = new Map<string, LaneRevisionRow>();
   private readonly frames = new Map<string, FrameRow>();
@@ -579,6 +594,8 @@ class FakeD1Database {
   }
 
   run(sql: string, bindings: unknown[]): D1Result {
+    this.executedSql.push(sql);
+
     if (sql.includes("DELETE FROM frame_records")) {
       this.deleteBatchFrameRecords(bindings as string[]);
     }
