@@ -155,9 +155,7 @@ describe("center-worker contract", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_ingest_payload",
-      diagnostics: [
-        expect.objectContaining({ path: "frames.0.records.1.id" }),
-      ],
+      diagnostics: [expect.objectContaining({ path: "frames.0.records.1.id" })],
     });
     expect(harness.storage.writeCount).toBe(0);
   });

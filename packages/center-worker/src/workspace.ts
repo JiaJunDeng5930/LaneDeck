@@ -12,7 +12,7 @@ import type {
   QueryResponse,
 } from "@lanedeck/protocol";
 
-import { badRequest } from "./errors";
+import { ApiError, badRequest } from "./errors";
 import { LiveHub, type LiveSocket } from "./live";
 import { contentRevisionToJson } from "./storage/d1";
 import { normalizeObjectPath } from "./storage/r2";
@@ -58,6 +58,7 @@ export class WorkspaceService {
   }
 
   async ingest(batch: IngestBatch): Promise<IngestAck> {
+    validateIngestIdentity(batch);
     await this.options.storage.saveIngestBatch(batch, this.clock());
     const ack: IngestAck = {
       batchId: batch.batchId,
@@ -310,6 +311,43 @@ function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
     source: requiredString(payload, "source"),
     metadata: optionalJsonObject(payload, "metadata") ?? {},
   };
+}
+
+function validateIngestIdentity(batch: IngestBatch): void {
+  const diagnostics: Diagnostic[] = [];
+  const frameIdentities = new Set<string>();
+
+  batch.frames.forEach((frame, frameIndex) => {
+    const frameIdentity = [
+      frame.laneId,
+      frame.stage,
+      frame.frameNo.toString(),
+    ].join("\u0000");
+    if (frameIdentities.has(frameIdentity)) {
+      diagnostics.push({
+        path: `frames.${frameIndex}`,
+        message: "expected unique laneId, stage, and frameNo within batch",
+      });
+    } else {
+      frameIdentities.add(frameIdentity);
+    }
+
+    const recordIds = new Set<string>();
+    frame.records.forEach((record, recordIndex) => {
+      if (recordIds.has(record.id)) {
+        diagnostics.push({
+          path: `frames.${frameIndex}.records.${recordIndex}.id`,
+          message: "expected unique record id within frame",
+        });
+      } else {
+        recordIds.add(record.id);
+      }
+    });
+  });
+
+  if (diagnostics.length > 0) {
+    throw new ApiError(400, "invalid_ingest_payload", diagnostics);
+  }
 }
 
 function readPatchLaneConfigPayload(
