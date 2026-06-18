@@ -127,6 +127,42 @@ describe("center-worker contract", () => {
     expect(harness.storage.writeCount).toBe(0);
   });
 
+  it("ingest rejects duplicate frame identities before coordinator RPC", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ingest",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          batchId: "batch-1",
+          frames: [validFrame, { ...validFrame, summary: { duplicate: true } }],
+        },
+        "agent-token",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_ingest_payload",
+      diagnostics: [expect.objectContaining({ path: "frames.1" })],
+    });
+    expect(fetched).toBe(false);
+  });
+
   it("ingest rejects duplicate record ids within a frame before writes", async () => {
     const harness = createHarness();
     const response = await handleRequest(
