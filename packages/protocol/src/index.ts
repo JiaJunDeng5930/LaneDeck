@@ -115,6 +115,21 @@ export type MutationResult =
       diagnostics: Diagnostic[];
     };
 
+export interface ContentBuildArtifact {
+  path: string;
+  body: string;
+  contentType?: string;
+}
+
+export interface ContentBuildCompleteRequest {
+  workspaceId: string;
+  machineId: string;
+  buildRequestId: string;
+  contentRevision: string;
+  entrypoint: string;
+  artifacts: ContentBuildArtifact[];
+}
+
 export type ShellContentMessage =
   | {
       type: "ready";
@@ -142,7 +157,9 @@ export type AgentControlMessage =
   | {
       type: "build_content";
       messageId: string;
+      machineId: string;
       contentId: string;
+      contentRevision: string;
       cwd: string;
       command: string;
     }
@@ -224,6 +241,31 @@ export function parseMutationRequest(input: unknown): MutationRequest {
   return request;
 }
 
+export function parseContentBuildCompleteRequest(
+  input: unknown,
+): ContentBuildCompleteRequest {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const artifacts = validator
+    .array(object.artifacts, "artifacts")
+    .map((artifact, index) =>
+      parseContentBuildArtifact(artifact, `artifacts.${index}`, validator),
+    );
+  const request: ContentBuildCompleteRequest = {
+    workspaceId: validator.string(object.workspaceId, "workspaceId"),
+    machineId: validator.string(object.machineId, "machineId"),
+    buildRequestId: validator.string(object.buildRequestId, "buildRequestId"),
+    contentRevision: validator.string(
+      object.contentRevision,
+      "contentRevision",
+    ),
+    entrypoint: validator.string(object.entrypoint, "entrypoint"),
+    artifacts,
+  };
+  validator.finish();
+  return request;
+}
+
 export function parseShellContentMessage(input: unknown): ShellContentMessage {
   const validator = new Validator();
   const object = validator.object(input, "$");
@@ -299,7 +341,12 @@ export function parseAgentControlMessage(input: unknown): AgentControlMessage {
     const message: AgentControlMessage = {
       type,
       messageId,
+      machineId: validator.string(object.machineId, "machineId"),
       contentId: validator.string(object.contentId, "contentId"),
+      contentRevision: validator.string(
+        object.contentRevision,
+        "contentRevision",
+      ),
       cwd: validator.string(object.cwd, "cwd"),
       command: validator.string(object.command, "command"),
     };
@@ -333,6 +380,26 @@ export function parseAgentControlMessage(input: unknown): AgentControlMessage {
   );
   validator.finish();
   throw new Error("unreachable");
+}
+
+function parseContentBuildArtifact(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): ContentBuildArtifact {
+  const object = validator.object(input, path);
+  return {
+    path: validator.string(object.path, joinPath(path, "path")),
+    body: validator.string(object.body, joinPath(path, "body")),
+    ...(object.contentType === undefined
+      ? {}
+      : {
+          contentType: validator.string(
+            object.contentType,
+            joinPath(path, "contentType"),
+          ),
+        }),
+  };
 }
 
 function parseLaneConfigWithValidator(
