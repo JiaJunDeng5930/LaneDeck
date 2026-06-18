@@ -10,8 +10,7 @@ use lanedeck_agent_runtime::{
     ScriptRunRequest, ScriptRunner, SpoolEntry, SpoolEntryId,
 };
 use lanedeck_protocol::{
-    ContentBuildCompleteRequest, Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch,
-    LaneConfig,
+    ContentBuildCompleteRequest, Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig,
 };
 use serde_json::{Value, json};
 
@@ -565,11 +564,7 @@ impl CenterProbe {
     }
 
     pub fn posted_build_completions(&self) -> Vec<ContentBuildCompleteRequest> {
-        self.inner
-            .lock()
-            .unwrap()
-            .posted_build_completions
-            .clone()
+        self.inner.lock().unwrap().posted_build_completions.clone()
     }
 
     pub fn control_connect_requests(&self) -> Vec<ControlConnectRequest> {
@@ -645,9 +640,10 @@ impl CenterClient for CenterProbe {
     ) -> Result<(), AgentError> {
         let mut inner = self.inner.lock().unwrap();
         inner.posted_build_completions.push(request);
-        match inner.outcome {
-            CenterPostOutcome::NetworkFailure => Err(AgentError::network("center unreachable")),
-            _ => Ok(()),
+        if matches!(&inner.outcome, CenterPostOutcome::NetworkFailure) {
+            Err(AgentError::network("center unreachable"))
+        } else {
+            Ok(())
         }
     }
 }

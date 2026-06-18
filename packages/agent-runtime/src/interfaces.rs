@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use lanedeck_protocol::{Diagnostic, IngestAck, IngestBatch};
+use lanedeck_protocol::{ContentBuildCompleteRequest, Diagnostic, IngestAck, IngestBatch};
 
 use crate::{
     AgentError, ControlConnectRequest, ControlMessageId, ControlMessageRecord, ControlSession,
@@ -14,6 +14,11 @@ pub trait CenterClient {
         &self,
         request: ControlConnectRequest,
     ) -> Result<ControlSession, AgentError>;
+
+    async fn post_content_build_complete(
+        &self,
+        request: ContentBuildCompleteRequest,
+    ) -> Result<(), AgentError>;
 }
 
 pub trait LocalSpool {

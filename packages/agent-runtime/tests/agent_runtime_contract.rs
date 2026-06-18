@@ -12,11 +12,10 @@ use serde_json::json;
 use contract_helpers::{
     CenterProbe, ScriptRunnerProbe, SpoolProbe, agent_config_with_lane_config,
     content_build_script_output, content_root, diagnostic_script_output,
-    downstream_builtin_stage_cases,
-    downstream_script_stage_missing_setting_cases, duplicate_nested_lane_identity_agent_config,
-    duration, empty_metric_agent_config, ingest_batch, instant,
-    mismatched_lane_identity_agent_config, pending_spool_entry, reloaded_script_lane_config,
-    reloaded_scripted_metric_lane_config, script_lane_agent_config,
+    downstream_builtin_stage_cases, downstream_script_stage_missing_setting_cases,
+    duplicate_nested_lane_identity_agent_config, duration, empty_metric_agent_config, ingest_batch,
+    instant, mismatched_lane_identity_agent_config, pending_spool_entry,
+    reloaded_script_lane_config, reloaded_scripted_metric_lane_config, script_lane_agent_config,
     script_lane_agent_config_with_interval, script_output_with_record, script_output_with_records,
     script_stage_non_bool_capture_setting_cases, scripted_metric_agent_config,
     scripted_metric_agent_config_with_upstream_history_limit, successful_script_output,
@@ -664,10 +663,9 @@ async fn reload_invalid_frame_settings_are_config_errors_and_keep_active_lane() 
 
 #[tokio::test]
 async fn build_content_control_message_calls_content_build_handler() {
-    let now = instant(1_700_014_000);
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::default();
-    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
     let mut service =
         AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
 
@@ -701,9 +699,13 @@ async fn build_content_control_message_posts_build_completion() {
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::default();
     let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
-    let mut service =
-        AgentService::new(script_lane_agent_config(), center.clone(), spool, runner.clone())
-            .unwrap();
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center.clone(),
+        spool,
+        runner.clone(),
+    )
+    .unwrap();
 
     let reply = service
         .handle_control_message(ControlMessage::build_content(
@@ -749,9 +751,13 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
     let center = CenterProbe::failing_network();
     let spool = SpoolProbe::default();
     let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
-    let mut service =
-        AgentService::new(script_lane_agent_config(), center.clone(), spool, runner.clone())
-            .unwrap();
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center.clone(),
+        spool,
+        runner.clone(),
+    )
+    .unwrap();
 
     let error = service
         .handle_control_message(ControlMessage::build_content(
@@ -885,7 +891,7 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::default();
     let runner = ScriptRunnerProbe::with_outputs(vec![
-        successful_script_output(now),
+        content_build_script_output(),
         successful_script_output(now),
     ]);
     let mut service = AgentService::new(
@@ -954,10 +960,9 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
 
 #[tokio::test]
 async fn control_completion_persist_failure_keeps_replay_path() {
-    let now = instant(1_700_014_150);
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::fail_next_control_completion();
-    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
     let mut service = AgentService::new(
         script_lane_agent_config(),
         center,

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
-use lanedeck_protocol::{Diagnostic, FrameRecord, IngestBatch, LaneConfig};
+use lanedeck_protocol::{ContentBuildArtifact, Diagnostic, FrameRecord, IngestBatch, LaneConfig};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
@@ -177,6 +177,10 @@ pub struct ScriptRunOutput {
     pub records: Vec<FrameRecord>,
     #[serde(default)]
     pub diagnostics: Vec<Diagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<ContentBuildArtifact>,
 }
 
 impl ScriptRunOutput {
@@ -184,6 +188,8 @@ impl ScriptRunOutput {
         Self {
             records,
             diagnostics: Vec::new(),
+            entrypoint: None,
+            artifacts: Vec::new(),
         }
     }
 }

@@ -7,10 +7,10 @@ use lanedeck_lane_engine::{
     EngineEffect, EngineError, HistoryRequest, HistoryStore, LaneEngine, StageRunner,
 };
 use lanedeck_protocol::{
-    Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig, StageHistory,
-    StageInvocation, StageKind, StageMode, StageResult,
+    ContentBuildCompleteRequest, Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch,
+    LaneConfig, StageHistory, StageInvocation, StageKind, StageMode, StageResult,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     AgentConfig, AgentError, AgentRunReport, CenterClient, ControlMessage, ControlReply,
@@ -379,18 +379,44 @@ where
                         self.machine_id
                     )));
                 }
+                let build_request_id = message_id.as_str().to_string();
                 let request = ScriptRunRequest {
                     purpose: ScriptPurpose::BuildContent,
-                    lane_id: content_id,
+                    lane_id: content_id.clone(),
                     command,
                     cwd: cwd.into(),
-                    input: None,
+                    input: Some(json!({
+                        "workspaceId": self.workspace_id.clone(),
+                        "machineId": self.machine_id.clone(),
+                        "buildRequestId": build_request_id.clone(),
+                        "contentId": content_id.clone(),
+                        "contentRevision": content_revision.clone()
+                    })),
                     timeout: fixed_duration_seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
                     capture_stderr: true,
                     side_effect_policy: ScriptSideEffectPolicy::ContentBuildBoundary,
                 };
-                self.runner.run_script(request)?;
+                let output = self.runner.run_script(request)?;
+                let entrypoint = output.entrypoint.ok_or_else(|| {
+                    AgentError::script("build_content output entrypoint must be present")
+                })?;
+                if output.artifacts.is_empty() {
+                    return Err(AgentError::script(
+                        "build_content output artifacts must be non-empty",
+                    ));
+                }
+                self.center
+                    .post_content_build_complete(ContentBuildCompleteRequest {
+                        workspace_id: self.workspace_id.clone(),
+                        machine_id: self.machine_id.clone(),
+                        build_request_id,
+                        content_id,
+                        content_revision,
+                        entrypoint,
+                        artifacts: output.artifacts,
+                    })
+                    .await?;
                 Ok(ControlReply::accepted(message_id, "build_content"))
             }
             ControlMessage::ApplyLocalChange {
