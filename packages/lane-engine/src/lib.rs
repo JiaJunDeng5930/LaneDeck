@@ -64,6 +64,8 @@ pub struct LaneEngine<S, R> {
     next_frame_no: u64,
     max_records: usize,
     max_duration: Duration,
+    active_max_records: usize,
+    active_max_duration: Duration,
     effects: Vec<EngineEffect>,
 }
 
@@ -127,6 +129,8 @@ where
             next_frame_no,
             max_records,
             max_duration,
+            active_max_records: max_records,
+            active_max_duration: max_duration,
             effects: Vec::new(),
         })
     }
@@ -143,6 +147,10 @@ where
         self.config = config;
         self.max_records = max_records;
         self.max_duration = max_duration;
+        if !self.has_open_raw_window() {
+            self.active_max_records = max_records;
+            self.active_max_duration = max_duration;
+        }
 
         Ok(())
     }
@@ -196,16 +204,18 @@ where
     ) -> Result<Vec<EngineEffect>, EngineError> {
         if self.pending_raw_close.is_some() {
             self.retry_pending_raw_close()?;
-        } else if self.raw_records.len() >= self.max_records {
+        } else if self.raw_records.len() >= self.active_max_records {
             self.request_raw_close(TriggerKind::Count, now)?;
         }
 
         if self.raw_opened_at.is_none() {
             self.raw_opened_at = Some(now);
+            self.active_max_records = self.max_records;
+            self.active_max_duration = self.max_duration;
         }
         self.raw_records.push(record);
 
-        if self.raw_records.len() >= self.max_records {
+        if self.raw_records.len() >= self.active_max_records {
             self.request_raw_close(TriggerKind::Count, now)?;
         }
 
@@ -222,16 +232,18 @@ where
             Some(opened_at) => opened_at,
             None => {
                 self.raw_opened_at = Some(now);
+                self.active_max_records = self.max_records;
+                self.active_max_duration = self.max_duration;
                 return Ok(Vec::new());
             }
         };
 
-        if self.raw_records.len() >= self.max_records {
+        if self.raw_records.len() >= self.active_max_records {
             self.request_raw_close(TriggerKind::Count, now)?;
             return Ok(self.drain_effects());
         }
 
-        if now.signed_duration_since(opened_at) >= self.max_duration {
+        if now.signed_duration_since(opened_at) >= self.active_max_duration {
             self.request_raw_close(TriggerKind::Time, now)?;
         }
 
@@ -403,8 +415,16 @@ where
         self.raw_records.clear();
         self.next_frame_no += 1;
         self.raw_opened_at = None;
+        self.active_max_records = self.max_records;
+        self.active_max_duration = self.max_duration;
 
         Ok(())
+    }
+
+    fn has_open_raw_window(&self) -> bool {
+        self.raw_opened_at.is_some()
+            || !self.raw_records.is_empty()
+            || self.pending_raw_close.is_some()
     }
 
     fn ensure_pending_raw_frame(&mut self) {
