@@ -156,6 +156,48 @@ pub fn downstream_script_stage_missing_setting_cases()
     ]
 }
 
+pub fn script_stage_non_bool_capture_setting_cases()
+-> Vec<(&'static str, LaneConfig, &'static str, &'static str)> {
+    vec![
+        (
+            "raw stage captureStdout string",
+            script_stage_non_bool_capture_setting("rawStage", "captureStdout"),
+            "rawStage",
+            "captureStdout",
+        ),
+        (
+            "raw stage captureStderr string",
+            script_stage_non_bool_capture_setting("rawStage", "captureStderr"),
+            "rawStage",
+            "captureStderr",
+        ),
+        (
+            "metric stage captureStdout string",
+            script_stage_non_bool_capture_setting("metricStage", "captureStdout"),
+            "metricStage",
+            "captureStdout",
+        ),
+        (
+            "metric stage captureStderr string",
+            script_stage_non_bool_capture_setting("metricStage", "captureStderr"),
+            "metricStage",
+            "captureStderr",
+        ),
+        (
+            "event stage captureStdout string",
+            script_stage_non_bool_capture_setting("eventStage", "captureStdout"),
+            "eventStage",
+            "captureStdout",
+        ),
+        (
+            "event stage captureStderr string",
+            script_stage_non_bool_capture_setting("eventStage", "captureStderr"),
+            "eventStage",
+            "captureStderr",
+        ),
+    ]
+}
+
 pub fn downstream_builtin_stage_cases() -> Vec<(&'static str, LaneConfig, &'static str)> {
     vec![
         (
@@ -303,6 +345,30 @@ fn downstream_script_stage_missing_setting(
     lane
 }
 
+fn script_stage_non_bool_capture_setting(
+    stage_path: &'static str,
+    capture_key: &str,
+) -> LaneConfig {
+    let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
+
+    match stage_path {
+        "rawStage" => lane.raw_stage.settings[capture_key] = json!("yes"),
+        "metricStage" => {
+            lane.metric_stage.mode = from_json(json!("script"));
+            lane.metric_stage.settings = script_stage_settings();
+            lane.metric_stage.settings[capture_key] = json!("yes");
+        }
+        "eventStage" => {
+            lane.event_stage.mode = from_json(json!("script"));
+            lane.event_stage.settings = script_stage_settings();
+            lane.event_stage.settings[capture_key] = json!("yes");
+        }
+        _ => unreachable!("known script stage path"),
+    }
+
+    lane
+}
+
 fn downstream_builtin_stage(stage_path: &'static str) -> LaneConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
 
@@ -315,14 +381,18 @@ fn downstream_builtin_stage(stage_path: &'static str) -> LaneConfig {
     lane
 }
 
-fn script_stage_settings_without(missing_key: &str) -> Value {
-    let mut settings = json!({
+fn script_stage_settings() -> Value {
+    json!({
         "command": "transform-cpu",
         "cwd": "/var/lib/lanedeck/stages/downstream",
         "timeoutSeconds": 7,
         "captureStdout": true,
         "captureStderr": true
-    });
+    })
+}
+
+fn script_stage_settings_without(missing_key: &str) -> Value {
+    let mut settings = script_stage_settings();
     settings
         .as_object_mut()
         .expect("script stage settings object")
@@ -405,6 +475,7 @@ struct CenterProbeState {
 #[derive(Clone)]
 enum CenterPostOutcome {
     Ack,
+    AckWithBatchId(String),
     RejectValidation,
     NetworkFailure,
 }
@@ -412,6 +483,10 @@ enum CenterPostOutcome {
 impl CenterProbe {
     pub fn accepting() -> Self {
         Self::with_outcome(CenterPostOutcome::Ack)
+    }
+
+    pub fn acknowledging_batch_id(batch_id: &str) -> Self {
+        Self::with_outcome(CenterPostOutcome::AckWithBatchId(batch_id.to_string()))
     }
 
     pub fn failing_network() -> Self {
@@ -442,9 +517,14 @@ impl CenterClient for CenterProbe {
         let mut inner = self.inner.lock().unwrap();
         inner.posted_batches.push(batch.clone());
 
-        match inner.outcome {
+        match &inner.outcome {
             CenterPostOutcome::Ack => Ok(from_json(json!({
                 "batchId": batch.batch_id,
+                "acceptedFrameCount": batch.frames.len(),
+                "diagnostics": []
+            }))),
+            CenterPostOutcome::AckWithBatchId(batch_id) => Ok(from_json(json!({
+                "batchId": batch_id,
                 "acceptedFrameCount": batch.frames.len(),
                 "diagnostics": []
             }))),

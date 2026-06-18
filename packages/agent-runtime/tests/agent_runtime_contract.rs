@@ -13,9 +13,10 @@ use contract_helpers::{
     duration, empty_metric_agent_config, ingest_batch, instant,
     mismatched_lane_identity_agent_config, pending_spool_entry, reloaded_script_lane_config,
     script_lane_agent_config, script_lane_agent_config_with_interval, script_output_with_record,
-    script_output_with_records, scripted_metric_agent_config,
-    scripted_metric_agent_config_with_upstream_history_limit, successful_script_output,
-    two_lane_agent_config, two_record_frame_agent_config, unknown_script_lane_config,
+    script_output_with_records, script_stage_non_bool_capture_setting_cases,
+    scripted_metric_agent_config, scripted_metric_agent_config_with_upstream_history_limit,
+    successful_script_output, two_lane_agent_config, two_record_frame_agent_config,
+    unknown_script_lane_config,
 };
 
 #[tokio::test]
@@ -171,6 +172,34 @@ async fn acked_upload_removes_spool_entries() {
     assert!(spool.pending_entries().is_empty());
     assert_eq!(report.uploaded_batch_count, 1);
     assert_eq!(report.acked_entry_count, 1);
+}
+
+#[tokio::test]
+async fn ack_batch_id_mismatch_marks_entry_retry_pending() {
+    let now = instant(1_700_011_500);
+    let batch = ingest_batch("batch-original", now);
+    let center = CenterProbe::acknowledging_batch_id("batch-other");
+    let spool = SpoolProbe::with_pending(vec![pending_spool_entry("spool-4", batch.clone())]);
+    let runner = ScriptRunnerProbe::with_outputs(Vec::new());
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center.clone(),
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    let report = service.flush_spool().await.unwrap();
+    let pending_entries = spool.pending_entries();
+
+    assert_eq!(center.posted_batches(), vec![batch]);
+    assert!(spool.acked_ids().is_empty());
+    assert_eq!(spool.retry_ids(), vec![SpoolEntryId::from("spool-4")]);
+    assert!(spool.rejected_ids().is_empty());
+    assert_eq!(pending_entries.len(), 1);
+    assert_eq!(pending_entries[0].id, SpoolEntryId::from("spool-4"));
+    assert_eq!(pending_entries[0].batch.batch_id, "batch-original");
+    assert_eq!(report.retry_entry_count, 1);
 }
 
 #[tokio::test]
@@ -457,6 +486,14 @@ fn startup_rejects_schedule_interval_seconds_above_signed_duration_limit() {
     config.lanes[0].schedule = schedule;
 
     let message = new_service_config_message(config);
+
+    assert!(message.contains("lane.cpu"));
+    assert!(message.contains("schedule.intervalSeconds"));
+}
+
+#[test]
+fn startup_rejects_zero_schedule_interval_seconds() {
+    let message = new_service_config_message(script_lane_agent_config_with_interval(0));
 
     assert!(message.contains("lane.cpu"));
     assert!(message.contains("schedule.intervalSeconds"));
@@ -920,6 +957,43 @@ async fn downstream_script_stage_settings_validated_at_update_boundary() {
 }
 
 #[tokio::test]
+async fn script_stage_capture_settings_require_boolean_at_update_boundary() {
+    for (case_name, bad_lane, stage_path, capture_key) in
+        script_stage_non_bool_capture_setting_cases()
+    {
+        let new_message =
+            new_service_config_message(agent_config_with_lane_config(bad_lane.clone()));
+        assert_stage_setting_config_message(&new_message, stage_path, capture_key, case_name);
+
+        let now = instant(1_700_017_600);
+        let spool = SpoolProbe::default();
+        let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+        let mut service = AgentService::new(
+            script_lane_agent_config(),
+            CenterProbe::accepting(),
+            spool.clone(),
+            runner.clone(),
+        )
+        .unwrap();
+
+        let reload_error = service
+            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .await
+            .unwrap_err();
+        let reload_message = config_message(reload_error);
+        assert_stage_setting_config_message(&reload_message, stage_path, capture_key, case_name);
+
+        let report = service.run_once(now).await.unwrap();
+        let requests = runner.requests();
+
+        assert_eq!(report.lane_execution_count, 1, "{case_name}");
+        assert_eq!(requests.len(), 1, "{case_name}");
+        assert_eq!(requests[0].purpose, ScriptPurpose::CollectSource);
+        assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+    }
+}
+
+#[tokio::test]
 async fn downstream_builtin_stages_are_rejected_at_update_boundary() {
     for (case_name, bad_lane, stage_path) in downstream_builtin_stage_cases() {
         let new_message =
@@ -990,6 +1064,17 @@ fn assert_builtin_stage_config_message(message: &str, stage_path: &str, case_nam
     assert!(message.contains("lane.cpu"), "{case_name}: {message}");
     assert!(message.contains(stage_path), "{case_name}: {message}");
     assert!(message.contains("builtin"), "{case_name}: {message}");
+}
+
+fn assert_stage_setting_config_message(
+    message: &str,
+    stage_path: &str,
+    setting_key: &str,
+    case_name: &str,
+) {
+    assert!(message.contains("lane.cpu"), "{case_name}: {message}");
+    assert!(message.contains(stage_path), "{case_name}: {message}");
+    assert!(message.contains(setting_key), "{case_name}: {message}");
 }
 
 fn metric_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
