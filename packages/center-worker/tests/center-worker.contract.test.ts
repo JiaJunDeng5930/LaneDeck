@@ -411,6 +411,35 @@ describe("center-worker contract", () => {
     );
   });
 
+  it("historical content mutation skips live broadcast and reports current diagnostic", async () => {
+    const harness = createHarness(new SupersededStorage());
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "patch_content",
+        payload: {
+          path: "index.html",
+          source: "<main>historical</main>",
+        },
+      }),
+    ).resolves.toMatchObject({
+      mutation: "patch_content",
+      mutationId: "id-1",
+      contentRevision: "id-2",
+      diagnostics: [
+        {
+          path: "currentContent",
+          message: "superseded by newer mutation sequence",
+        },
+      ],
+    });
+
+    expect(browser.decodedMessages()).toEqual([]);
+  });
+
   it("agent WSS receives build command when mutation requires local build", async () => {
     const harness = createHarness();
     const agent = new RecordingSocket();
@@ -514,6 +543,35 @@ describe("center-worker contract", () => {
     });
   });
 
+  it("historical lane config mutation skips live and agent control side effects", async () => {
+    const harness = createHarness(new SupersededStorage());
+    const agent = new RecordingSocket();
+    const browser = new RecordingSocket();
+    harness.live.addAgent(agent);
+    harness.live.addBrowser(browser);
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "patch_lane_config",
+        payload: { config: validLaneConfig },
+      }),
+    ).resolves.toMatchObject({
+      mutation: "patch_lane_config",
+      mutationId: "id-1",
+      laneRevision: "id-2",
+      diagnostics: [
+        {
+          path: "currentLane",
+          message: "superseded by newer mutation sequence",
+        },
+      ],
+    });
+
+    expect(browser.decodedMessages()).toEqual([]);
+    expect(agent.decodedMessages()).toEqual([]);
+  });
+
   it("lane config mutation reports empty agent delivery after saving revision", async () => {
     const harness = createHarness();
 
@@ -607,8 +665,7 @@ describe("center-worker contract", () => {
   });
 });
 
-function createHarness() {
-  const storage = new MemoryCenterStorage();
+function createHarness(storage = new MemoryCenterStorage()) {
   const objects = new MemoryContentObjectStore();
   const live = new LiveHub();
   let nextId = 0;
@@ -692,6 +749,7 @@ class MemoryCenterStorage implements CenterStorage {
   readonly mutations: MutationRequest[] = [];
   readonly laneRevisions: LaneRevisionRecord[] = [];
   writeCount = 0;
+  private mutationSequence = 0;
 
   async initialize(): Promise<void> {}
 
@@ -702,8 +760,11 @@ class MemoryCenterStorage implements CenterStorage {
   }
 
   async getCurrentState(workspaceId: string): Promise<JsonObject> {
-    const currentContent =
-      this.contentRevisions[this.contentRevisions.length - 1] ?? null;
+    const currentContent = currentByMutationSequence(
+      this.contentRevisions.filter(
+        (record) => record.workspaceId === workspaceId,
+      ),
+    );
     return {
       workspaceId,
       frames: this.batches.flatMap((batch) =>
@@ -742,7 +803,7 @@ class MemoryCenterStorage implements CenterStorage {
     const records = this.contentRevisions.filter(
       (record) => record.workspaceId === workspaceId,
     );
-    return records[records.length - 1] ?? null;
+    return currentByMutationSequence(records);
   }
 
   async saveLaneRevision(record: LaneRevisionRecord): Promise<void> {
@@ -750,8 +811,34 @@ class MemoryCenterStorage implements CenterStorage {
     this.laneRevisions.push(record);
   }
 
-  async saveMutation(request: MutationRequest): Promise<void> {
+  async saveMutation(request: MutationRequest): Promise<number> {
     this.writeCount += 1;
+    this.mutationSequence += 1;
     this.mutations.push(request);
+    return this.mutationSequence;
   }
+}
+
+class SupersededStorage extends MemoryCenterStorage {
+  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
+    await super.saveContentRevision(record);
+    return false;
+  }
+
+  async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {
+    await super.saveLaneRevision(record);
+    return false;
+  }
+}
+
+function currentByMutationSequence<T extends { mutationSequence: number }>(
+  records: T[],
+): T | null {
+  return records.reduce<T | null>(
+    (current, record) =>
+      current === null || current.mutationSequence <= record.mutationSequence
+        ? record
+        : current,
+    null,
+  );
 }

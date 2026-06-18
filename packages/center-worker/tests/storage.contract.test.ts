@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { D1CenterStorage } from "../src/storage/d1";
-import {
-  R2ContentStore,
-  rewriteViteAssetReferences,
-} from "../src/storage/r2";
+import { R2ContentStore, rewriteViteAssetReferences } from "../src/storage/r2";
 
 import type {
   ContentRevisionRecord,
@@ -26,9 +23,9 @@ describe("center-worker storage contract", () => {
     await expect(storage.getCurrentContent("workspace.local")).resolves.toEqual(
       expect.objectContaining({ revision: "revision-new" }),
     );
-    expect(
-      db.pointerValue("workspace.local", "current_content_revision"),
-    ).toBe("revision-new");
+    expect(db.pointerValue("workspace.local", "current_content_revision")).toBe(
+      "revision-new",
+    );
   });
 
   it("keeps current lane pointer on the newest mutation sequence", async () => {
@@ -151,7 +148,9 @@ class FakeD1Database {
   }
 
   pointerValue(workspaceId: string, key: string): string | null {
-    return this.pointers.get(pointerKey(workspaceId, key))?.pointerValue ?? null;
+    return (
+      this.pointers.get(pointerKey(workspaceId, key))?.pointerValue ?? null
+    );
   }
 
   run(sql: string, bindings: unknown[]): D1Result {
@@ -207,9 +206,8 @@ class FakeD1Database {
 
     if (sql.includes("FROM content_revisions")) {
       const [workspaceId, revision] = bindings as string[];
-      return (
-        this.contentRevisions.get(contentKey(workspaceId, revision)) ?? null
-      ) as T | null;
+      return (this.contentRevisions.get(contentKey(workspaceId, revision)) ??
+        null) as T | null;
     }
 
     return null;
