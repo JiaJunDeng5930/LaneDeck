@@ -120,18 +120,11 @@ async function readContentAsset(
   url: URL,
   env: CenterWorkerEnv,
 ): Promise<Response> {
-  const [, , revision, ...assetParts] = url.pathname.split("/");
-  if (revision === undefined || assetParts.length === 0) {
-    throw badRequest(
-      "invalid_content_path",
-      "path",
-      "expected content revision and asset path",
-    );
-  }
+  const { revision, assetPath } = parseContentAssetPath(url.pathname);
 
   const response = await new R2ContentStore(
     env.LANEDECK_BUCKET,
-  ).readContentAsset(revision, assetParts.join("/"));
+  ).readContentAsset(revision, assetPath);
 
   if (response === null) {
     return errorResponse(
@@ -142,6 +135,55 @@ async function readContentAsset(
   }
 
   return response;
+}
+
+function parseContentAssetPath(pathname: string): {
+  revision: string;
+  assetPath: string;
+} {
+  const [, contentSegment, revisionSegment, ...assetSegments] =
+    pathname.split("/");
+  if (
+    contentSegment !== "content" ||
+    revisionSegment === undefined ||
+    revisionSegment.length === 0 ||
+    assetSegments.length === 0 ||
+    assetSegments.some((segment) => segment.length === 0)
+  ) {
+    throw badRequest(
+      "invalid_content_path",
+      "path",
+      "expected content revision and asset path",
+    );
+  }
+
+  return {
+    revision: decodeContentPathSegment(revisionSegment),
+    assetPath: assetSegments.map(decodeContentPathSegment).join("/"),
+  };
+}
+
+function decodeContentPathSegment(segment: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    throw badRequest(
+      "invalid_content_path",
+      "path",
+      "expected valid URL-encoded content path",
+    );
+  }
+
+  if (decoded.includes("/") || decoded.includes("\\")) {
+    throw badRequest(
+      "invalid_content_path",
+      "path",
+      "expected URL path segments without encoded separators",
+    );
+  }
+
+  return decoded;
 }
 
 function workspace(env: CenterWorkerEnv, workspaceId: string) {
