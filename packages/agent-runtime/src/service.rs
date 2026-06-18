@@ -69,7 +69,12 @@ where
     P: LocalSpool,
     R: ScriptRunner,
 {
-    pub fn new(config: AgentConfig, center: C, spool: P, runner: R) -> Result<Self, AgentError> {
+    pub fn new(
+        config: AgentConfig,
+        center: C,
+        mut spool: P,
+        runner: R,
+    ) -> Result<Self, AgentError> {
         if config.flush.max_batch_size == 0 {
             return Err(AgentError::config("flush.maxBatchSize must be positive"));
         }
@@ -81,10 +86,12 @@ where
             let schedule_interval = Duration::seconds(lane.schedule.interval_seconds as i64);
             let lane_config = lane.config;
             validate_script_raw_stage(&lane_config)?;
+            let next_frame_no = spool.load_lane_frame_cursor(&lane_config.lane_id)?;
             lanes.push(LaneRuntime::new(
                 lane_config,
                 schedule_interval,
                 runner.clone(),
+                next_frame_no,
             )?);
         }
 
@@ -112,6 +119,19 @@ where
             }
             report.lane_execution_count += 1;
 
+            let opening_report = {
+                let lane = &mut self.lanes[lane_index];
+                open_lane_window(lane, now)
+            };
+            if let Some(error) = opening_report.error {
+                report
+                    .diagnostics
+                    .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
+                self.lanes[lane_index].mark_run(now);
+                continue;
+            }
+            self.apply_pipeline_effects(opening_report.effects, &mut report)?;
+
             let request = match collect_source_request(&self.lanes[lane_index].lane) {
                 Ok(request) => request,
                 Err(error) => {
@@ -136,7 +156,7 @@ where
 
             let pipeline_report = {
                 let lane = &mut self.lanes[lane_index];
-                run_lane_pipeline(lane, output, now)
+                run_lane_pipeline_after_source(lane, output, now)
             };
             self.lanes[lane_index].mark_run(now);
             if let Some(error) = pipeline_report.error {
@@ -144,17 +164,7 @@ where
                     .diagnostics
                     .push(lane_error_diagnostic(&self.lanes[lane_index].lane, error));
             }
-            let (frames, diagnostics) = split_effects(pipeline_report.effects);
-            report.diagnostics.extend(diagnostics);
-            report.produced_frame_count += frames.len();
-
-            if frames.is_empty() {
-                continue;
-            }
-
-            let batch = self.next_batch(frames);
-            self.enqueue_or_retain(batch)?;
-            report.enqueued_batch_count += 1;
+            self.apply_pipeline_effects(pipeline_report.effects, &mut report)?;
         }
 
         Ok(report)
@@ -257,10 +267,7 @@ where
             .iter_mut()
             .find(|existing| existing.lane.lane_id == lane_id)
             .ok_or_else(|| AgentError::config(format!("lane {lane_id} is not active")))?;
-        let mut runtime =
-            LaneRuntime::new(lane_config, existing.schedule_interval, self.runner.clone())?;
-        runtime.next_run_at = existing.next_run_at;
-        *existing = runtime;
+        existing.replace_config(lane_config)?;
 
         Ok(())
     }
@@ -310,6 +317,26 @@ where
             }
         }
     }
+
+    fn apply_pipeline_effects(
+        &mut self,
+        effects: Vec<EngineEffect>,
+        report: &mut AgentRunReport,
+    ) -> Result<(), AgentError> {
+        let (frames, diagnostics) = split_effects(effects);
+        report.diagnostics.extend(diagnostics);
+        report.produced_frame_count += frames.len();
+
+        if frames.is_empty() {
+            return Ok(());
+        }
+
+        let batch = self.next_batch(frames);
+        self.enqueue_or_retain(batch)?;
+        report.enqueued_batch_count += 1;
+
+        Ok(())
+    }
 }
 
 fn ack_is_complete(ack: &IngestAck, batch: &IngestBatch) -> bool {
@@ -349,11 +376,13 @@ where
         lane: LaneConfig,
         schedule_interval: Duration,
         runner: Arc<R>,
+        next_frame_no: u64,
     ) -> Result<Self, AgentError> {
-        let engine = LaneEngine::new(
+        let engine = LaneEngine::new_with_next_frame_no(
             lane.clone(),
             ServiceHistoryStore::with_limits(history_limits(&lane)),
             ServiceStageRunner { runner },
+            next_frame_no,
         )
         .map_err(map_engine_error)?;
 
@@ -372,6 +401,15 @@ where
 
     fn mark_run(&mut self, now: DateTime<Utc>) {
         self.next_run_at = Some(now + self.schedule_interval);
+    }
+
+    fn replace_config(&mut self, lane: LaneConfig) -> Result<(), AgentError> {
+        self.engine
+            .replace_config(lane.clone())
+            .map_err(map_engine_error)?;
+        self.lane = lane;
+
+        Ok(())
     }
 }
 
@@ -479,7 +517,23 @@ struct LanePipelineReport {
     error: Option<AgentError>,
 }
 
-fn run_lane_pipeline<R>(
+fn open_lane_window<R>(lane: &mut LaneRuntime<R>, now: DateTime<Utc>) -> LanePipelineReport
+where
+    R: ScriptRunner,
+{
+    match lane.engine.tick(now).map_err(map_engine_error) {
+        Ok(effects) => LanePipelineReport {
+            effects,
+            error: None,
+        },
+        Err(error) => LanePipelineReport {
+            effects: Vec::new(),
+            error: Some(error),
+        },
+    }
+}
+
+fn run_lane_pipeline_after_source<R>(
     lane: &mut LaneRuntime<R>,
     output: ScriptRunOutput,
     now: DateTime<Utc>,
@@ -488,16 +542,6 @@ where
     R: ScriptRunner,
 {
     let mut effects = Vec::new();
-
-    match lane.engine.tick(now).map_err(map_engine_error) {
-        Ok(opening_effects) => effects.extend(opening_effects),
-        Err(error) => {
-            return LanePipelineReport {
-                effects,
-                error: Some(error),
-            };
-        }
-    }
 
     for record in output.records {
         match lane

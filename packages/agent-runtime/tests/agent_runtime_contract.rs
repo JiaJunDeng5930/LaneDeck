@@ -112,6 +112,41 @@ async fn batch_ids_include_restart_safe_runtime_prefix() {
 }
 
 #[tokio::test]
+async fn frame_numbers_resume_from_spool_cursor_across_service_restart() {
+    let first = instant(1_700_010_810);
+    let second = instant(1_700_010_820);
+    let spool = SpoolProbe::default();
+    let first_runner =
+        ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:first", first)]);
+    let mut first_service = AgentService::new(
+        script_lane_agent_config(),
+        CenterProbe::accepting(),
+        spool.clone(),
+        first_runner,
+    )
+    .unwrap();
+
+    first_service.run_once(first).await.unwrap();
+    drop(first_service);
+
+    let second_runner =
+        ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:second", second)]);
+    let mut second_service = AgentService::new(
+        script_lane_agent_config(),
+        CenterProbe::accepting(),
+        spool.clone(),
+        second_runner,
+    )
+    .unwrap();
+
+    second_service.run_once(second).await.unwrap();
+
+    let batches = spool.enqueued_batches();
+    assert_eq!(batches[0].frames[0].frame_no, 1);
+    assert_eq!(batches[1].frames[0].frame_no, 2);
+}
+
+#[tokio::test]
 async fn acked_upload_removes_spool_entries() {
     let now = instant(1_700_011_000);
     let batch = ingest_batch("batch-1", now);
@@ -236,6 +271,38 @@ async fn reload_lane_config_preserves_existing_schedule_cadence() {
         runner.requests()[1].cwd,
         "/var/lib/lanedeck/sources/cpu-reloaded"
     );
+}
+
+#[tokio::test]
+async fn reload_lane_config_preserves_frame_sequence() {
+    let first = instant(1_700_013_650);
+    let second = instant(1_700_013_651);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        script_output_with_record("raw:first", first),
+        script_output_with_record("raw:second", second),
+    ]);
+    let mut service = AgentService::new(
+        script_lane_agent_config_with_interval(1),
+        center,
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    service.run_once(first).await.unwrap();
+    service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            reloaded_script_lane_config(),
+        ))
+        .await
+        .unwrap();
+    service.run_once(second).await.unwrap();
+
+    let batches = spool.enqueued_batches();
+    assert_eq!(batches[0].frames[0].frame_no, 1);
+    assert_eq!(batches[1].frames[0].frame_no, 2);
 }
 
 #[tokio::test]
@@ -611,6 +678,33 @@ async fn closed_frames_are_enqueued_when_later_record_fails() {
         .find(|frame| frame.stage == lanedeck_protocol::StageKind::Raw)
         .unwrap();
     assert_eq!(raw_frame.records[0].id, "raw:first");
+}
+
+#[tokio::test]
+async fn pending_close_retry_runs_before_next_source_collection() {
+    let first = instant(1_700_016_595);
+    let second = instant(1_700_016_596);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_results(vec![
+        Ok(script_output_with_record("raw:first", first)),
+        Err("metric failed first".to_string()),
+        Err("metric failed again".to_string()),
+    ]);
+    let mut config = scripted_metric_agent_config();
+    config.lanes[0].schedule.interval_seconds = 1;
+    let mut service = AgentService::new(config, center, spool, runner.clone()).unwrap();
+
+    let first_report = service.run_once(first).await.unwrap();
+    let second_report = service.run_once(second).await.unwrap();
+    let requests = runner.requests();
+
+    assert_eq!(first_report.diagnostics.len(), 1);
+    assert_eq!(second_report.diagnostics.len(), 1);
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].purpose, ScriptPurpose::CollectSource);
+    assert_eq!(requests[1].purpose, ScriptPurpose::TransformStage);
+    assert_eq!(requests[2].purpose, ScriptPurpose::TransformStage);
 }
 
 #[tokio::test]

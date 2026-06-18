@@ -17,6 +17,8 @@ pub trait CenterClient {
 }
 
 pub trait LocalSpool {
+    fn load_lane_frame_cursor(&mut self, lane_id: &str) -> Result<u64, AgentError>;
+
     fn enqueue(&mut self, batch: IngestBatch) -> Result<SpoolEntryId, AgentError>;
 
     fn pending_batch(&mut self, limit: usize) -> Result<Vec<SpoolEntry>, AgentError>;

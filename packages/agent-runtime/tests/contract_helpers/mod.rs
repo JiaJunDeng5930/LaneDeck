@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -309,6 +309,7 @@ pub struct SpoolProbe {
 struct SpoolProbeState {
     enqueued_batches: Vec<IngestBatch>,
     pending_entries: Vec<SpoolEntry>,
+    lane_frame_cursors: HashMap<String, u64>,
     acked_ids: Vec<SpoolEntryId>,
     retry_ids: Vec<SpoolEntryId>,
     rejected_ids: Vec<SpoolEntryId>,
@@ -361,6 +362,17 @@ impl SpoolProbe {
 }
 
 impl LocalSpool for SpoolProbe {
+    fn load_lane_frame_cursor(&mut self, lane_id: &str) -> Result<u64, AgentError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .lane_frame_cursors
+            .get(lane_id)
+            .copied()
+            .unwrap_or(1))
+    }
+
     fn enqueue(&mut self, batch: IngestBatch) -> Result<SpoolEntryId, AgentError> {
         let mut inner = self.inner.lock().unwrap();
         if inner.enqueue_failures_remaining > 0 {
@@ -369,6 +381,14 @@ impl LocalSpool for SpoolProbe {
         }
 
         let id = SpoolEntryId::from(format!("spool-{}", inner.enqueued_batches.len() + 1));
+        for frame in &batch.frames {
+            let next_cursor = frame.frame_no + 1;
+            inner
+                .lane_frame_cursors
+                .entry(frame.lane_id.clone())
+                .and_modify(|cursor| *cursor = (*cursor).max(next_cursor))
+                .or_insert(next_cursor);
+        }
         inner.enqueued_batches.push(batch.clone());
         inner
             .pending_entries

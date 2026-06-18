@@ -104,26 +104,16 @@ where
     R: StageRunner,
 {
     pub fn new(config: LaneConfig, store: S, runner: R) -> Result<Self, EngineError> {
-        let max_records = config.raw_stage.settings["frame"]["maxRecords"]
-            .as_u64()
-            .ok_or_else(|| {
-                EngineError::InvalidConfig("rawStage.settings.frame.maxRecords".into())
-            })? as usize;
-        let max_seconds = config.raw_stage.settings["frame"]["maxSeconds"]
-            .as_i64()
-            .ok_or_else(|| {
-                EngineError::InvalidConfig("rawStage.settings.frame.maxSeconds".into())
-            })?;
-        if max_records == 0 {
-            return Err(EngineError::InvalidConfig(
-                "rawStage.settings.frame.maxRecords must be positive".into(),
-            ));
-        }
-        if max_seconds <= 0 {
-            return Err(EngineError::InvalidConfig(
-                "rawStage.settings.frame.maxSeconds must be positive".into(),
-            ));
-        }
+        Self::new_with_next_frame_no(config, store, runner, 1)
+    }
+
+    pub fn new_with_next_frame_no(
+        config: LaneConfig,
+        store: S,
+        runner: R,
+        next_frame_no: u64,
+    ) -> Result<Self, EngineError> {
+        let (max_records, max_seconds) = frame_limits(&config)?;
 
         Ok(Self {
             config,
@@ -132,13 +122,51 @@ where
             raw_records: Vec::new(),
             raw_opened_at: None,
             pending_raw_close: None,
-            next_frame_no: 1,
+            next_frame_no,
             max_records,
             max_seconds,
             effects: Vec::new(),
         })
     }
 
+    pub fn replace_config(&mut self, config: LaneConfig) -> Result<(), EngineError> {
+        let (max_records, max_seconds) = frame_limits(&config)?;
+
+        self.config = config;
+        self.max_records = max_records;
+        self.max_seconds = max_seconds;
+
+        Ok(())
+    }
+}
+
+fn frame_limits(config: &LaneConfig) -> Result<(usize, i64), EngineError> {
+    let max_records = config.raw_stage.settings["frame"]["maxRecords"]
+        .as_u64()
+        .ok_or_else(|| EngineError::InvalidConfig("rawStage.settings.frame.maxRecords".into()))?
+        as usize;
+    let max_seconds = config.raw_stage.settings["frame"]["maxSeconds"]
+        .as_i64()
+        .ok_or_else(|| EngineError::InvalidConfig("rawStage.settings.frame.maxSeconds".into()))?;
+    if max_records == 0 {
+        return Err(EngineError::InvalidConfig(
+            "rawStage.settings.frame.maxRecords must be positive".into(),
+        ));
+    }
+    if max_seconds <= 0 {
+        return Err(EngineError::InvalidConfig(
+            "rawStage.settings.frame.maxSeconds must be positive".into(),
+        ));
+    }
+
+    Ok((max_records, max_seconds))
+}
+
+impl<S, R> LaneEngine<S, R>
+where
+    S: HistoryStore,
+    R: StageRunner,
+{
     pub fn ingest_raw_record(
         &mut self,
         record: FrameRecord,
