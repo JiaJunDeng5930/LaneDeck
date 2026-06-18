@@ -237,18 +237,18 @@ where
             let id = entry.id.clone();
             match self.center.post_ingest_batch(entry.batch.clone()).await {
                 Ok(ack) if ack.batch_id != entry.batch.batch_id => {
-                    self.spool.mark_retry(
-                        std::slice::from_ref(&id),
-                        ack_identity_retry_reason(&ack, &entry.batch),
-                    )?;
+                    let reason = ack_identity_retry_reason(&ack, &entry.batch);
+                    self.spool
+                        .mark_retry(std::slice::from_ref(&id), reason.clone())?;
                     report.retry_entry_count += 1;
+                    report.diagnostics.push(retry_diagnostic(reason));
                 }
                 Ok(ack) if ack_accepted_count_exceeds_batch(&ack, &entry.batch) => {
-                    self.spool.mark_retry(
-                        std::slice::from_ref(&id),
-                        ack_overcount_retry_reason(&ack, &entry.batch),
-                    )?;
+                    let reason = ack_overcount_retry_reason(&ack, &entry.batch);
+                    self.spool
+                        .mark_retry(std::slice::from_ref(&id), reason.clone())?;
                     report.retry_entry_count += 1;
+                    report.diagnostics.push(retry_diagnostic(reason));
                 }
                 Ok(ack) if ack_is_fully_accepted(&ack, &entry.batch) => {
                     self.spool.mark_acked(std::slice::from_ref(&id))?;
@@ -275,8 +275,10 @@ where
                 }
                 Err(error) => {
                     let reason = RetryReason::network(error.to_string());
-                    self.spool.mark_retry(std::slice::from_ref(&id), reason)?;
+                    self.spool
+                        .mark_retry(std::slice::from_ref(&id), reason.clone())?;
                     report.retry_entry_count += 1;
+                    report.diagnostics.push(retry_diagnostic(reason));
                 }
             }
         }
@@ -405,13 +407,13 @@ where
     }
 
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
-        validate_lane_config(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
         let existing = self
             .lanes
             .iter_mut()
             .find(|existing| existing.lane.lane_id == lane_id)
             .ok_or_else(|| AgentError::config(format!("lane {lane_id} is not active")))?;
+        validate_lane_config(&lane_config)?;
         existing.replace_config(lane_config)?;
 
         Ok(())
@@ -537,6 +539,13 @@ fn ack_partial_retry_reason(ack: &IngestAck, batch: &IngestBatch) -> RetryReason
         batch.frames.len(),
         batch.batch_id
     ))
+}
+
+fn retry_diagnostic(reason: RetryReason) -> Diagnostic {
+    Diagnostic {
+        path: "ingestAck".to_string(),
+        message: reason.message,
+    }
 }
 
 fn lane_error_diagnostic(lane: &LaneConfig, error: AgentError) -> Diagnostic {
