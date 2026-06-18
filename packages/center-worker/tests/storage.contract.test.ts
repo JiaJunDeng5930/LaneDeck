@@ -129,6 +129,53 @@ describe("center-worker storage contract", () => {
     ).toContain("/content/revision-1/assets/font.woff2");
   });
 
+  it("stores content source separately from served build artifacts", async () => {
+    const bucket = new FakeR2Bucket();
+    const store = new R2ContentStore(bucket as unknown as R2Bucket);
+
+    await expect(
+      store.writeContentSource({
+        workspaceId: "workspace.local",
+        revision: "revision-1",
+        sourcePath: "src/main.tsx",
+        source: "<App />",
+      }),
+    ).resolves.toEqual({
+      sourceKey: "content-source/workspace.local/revision-1/src/main.tsx",
+    });
+    expect(bucket.objectBody("content/revision-1/src/main.tsx")).toBeNull();
+
+    await expect(
+      store.writeContentBuildArtifacts({
+        revision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [
+          {
+            path: "index.html",
+            body: '<div id="root"></div>',
+            contentType: "text/html; charset=utf-8",
+          },
+          {
+            path: "assets/index.js",
+            body: "console.log('ok')",
+          },
+        ],
+      }),
+    ).resolves.toEqual({
+      entrypointKey: "content/revision-1/index.html",
+      assetKeys: [
+        "content/revision-1/index.html",
+        "content/revision-1/assets/index.js",
+      ],
+    });
+    expect(bucket.objectBody("content/revision-1/index.html")).toBe(
+      '<div id="root"></div>',
+    );
+    expect(bucket.objectBody("content/revision-1/assets/index.js")).toBe(
+      "console.log('ok')",
+    );
+  });
+
   it("rewrites CSS asset responses before serving them", async () => {
     const bucket = new FakeR2Bucket();
     bucket.putObject(
@@ -630,6 +677,22 @@ class FakeR2Bucket {
 
   putObject(key: string, body: string, contentType: string): void {
     this.objects.set(key, { body, contentType });
+  }
+
+  async put(
+    key: string,
+    body: string,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<void> {
+    this.putObject(
+      key,
+      body,
+      options?.httpMetadata?.contentType ?? "application/octet-stream",
+    );
+  }
+
+  objectBody(key: string): string | null {
+    return this.objects.get(key)?.body ?? null;
   }
 
   async get(key: string): Promise<R2ObjectBody | null> {

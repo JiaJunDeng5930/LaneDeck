@@ -327,6 +327,8 @@ describe("center-worker contract", () => {
 
   it("POST /api/ai/mutation writes content source to R2 and metadata to D1", async () => {
     const harness = createHarness();
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
     const response = await handleRequest(
       jsonRequest(
         "/api/ai/mutation",
@@ -357,9 +359,7 @@ describe("center-worker contract", () => {
         "content-source/workspace.local/id-2/src/dashboard.tsx",
       ),
     ).toBe("<h1>patched</h1>");
-    expect(harness.objects.writes.get("content/id-2/index.html")).toBe(
-      "<h1>patched</h1>",
-    );
+    expect(harness.objects.writes.has("content/id-2/index.html")).toBe(false);
     expect(harness.storage.contentRevisions).toEqual([
       expect.objectContaining({
         workspaceId: "workspace.local",
@@ -369,6 +369,10 @@ describe("center-worker contract", () => {
         contentPath: "index.html",
       }),
     ]);
+    await expect(
+      harness.storage.getCurrentContent("workspace.local"),
+    ).resolves.toBeNull();
+    expect(browser.decodedMessages()).toEqual([]);
   });
 
   it("invalid content mutation payload returns diagnostics without mutation log writes", async () => {
@@ -680,7 +684,41 @@ describe("center-worker contract", () => {
     expect(fetched).toBe(false);
   });
 
-  it("browser WSS receives content_changed after content mutation", async () => {
+  it("agent WebSocket rejects missing machine identity before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/ws/agent?workspaceId=workspace.local", {
+        method: "GET",
+        headers: {
+          authorization: "Bearer agent-token",
+          upgrade: "websocket",
+        },
+      }),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "missing_machine_id",
+      diagnostics: [expect.objectContaining({ path: "machineId" })],
+    });
+    expect(fetched).toBe(false);
+  });
+
+  it("POST /api/content/build-complete promotes content and broadcasts content_changed", async () => {
     const harness = createHarness();
     const browser = new RecordingSocket();
     harness.live.addBrowser(browser);
@@ -694,6 +732,47 @@ describe("center-worker contract", () => {
       },
     });
 
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/content/build-complete",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          buildRequestId: "build-1",
+          contentRevision: "id-2",
+          entrypoint: "index.html",
+          artifacts: [
+            {
+              path: "index.html",
+              body: '<div id="root"></div>',
+              contentType: "text/html; charset=utf-8",
+            },
+            {
+              path: "assets/index.js",
+              body: "console.log('ok')",
+              contentType: "text/javascript; charset=utf-8",
+            },
+          ],
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      contentRevision: "id-2",
+      diagnostics: [],
+    });
+    expect(harness.objects.writes.get("content/id-2/index.html")).toBe(
+      '<div id="root"></div>',
+    );
+    expect(harness.objects.writes.get("content/id-2/assets/index.js")).toBe(
+      "console.log('ok')",
+    );
+    await expect(
+      harness.storage.getCurrentContent("workspace.local"),
+    ).resolves.toMatchObject({ revision: "id-2", contentPath: "index.html" });
     expect(browser.decodedMessages()).toContainEqual(
       expect.objectContaining({
         type: "content_changed",
@@ -704,21 +783,38 @@ describe("center-worker contract", () => {
     );
   });
 
-  it("historical content mutation skips live broadcast and reports current diagnostic", async () => {
+  it("historical content build completion skips live broadcast and reports current diagnostic", async () => {
     const harness = createHarness(new SupersededStorage());
     const browser = new RecordingSocket();
     harness.live.addBrowser(browser);
 
-    await expect(
-      harness.workspace.mutate({
-        workspaceId: "workspace.local",
-        mutation: "patch_content",
-        payload: {
-          path: "index.html",
-          source: "<main>historical</main>",
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>historical</main>",
+      },
+    });
+
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/content/build-complete",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          buildRequestId: "build-1",
+          contentRevision: "id-2",
+          entrypoint: "index.html",
+          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
         },
-      }),
-    ).resolves.toMatchObject({
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
       mutation: "patch_content",
       mutationId: "id-1",
       contentRevision: "id-2",
@@ -736,9 +832,11 @@ describe("center-worker contract", () => {
   it("agent WSS receives build command when mutation requires local build", async () => {
     const harness = createHarness();
     const agent = new RecordingSocket();
-    harness.live.addAgent(agent);
+    harness.live.addAgent(agent, "machine.devbox");
     const buildPayload = {
+      machineId: "machine.devbox",
       contentId: "content.home",
+      contentRevision: "revision-1",
       cwd: "/workspace/content",
       command: "corepack pnpm --filter @lanedeck/content build",
     };
@@ -759,7 +857,9 @@ describe("center-worker contract", () => {
     expect(agent.decodedMessages()).toContainEqual({
       type: "build_content",
       messageId: "id-2",
+      machineId: "machine.devbox",
       contentId: "content.home",
+      contentRevision: "revision-1",
       cwd: "/workspace/content",
       command: "corepack pnpm --filter @lanedeck/content build",
     });
@@ -773,7 +873,9 @@ describe("center-worker contract", () => {
         workspaceId: "workspace.local",
         mutation: "request_local_build",
         payload: {
+          machineId: "machine.devbox",
           contentId: "content.home",
+          contentRevision: "revision-1",
           cwd: "/workspace/content",
           command: "corepack pnpm --filter @lanedeck/content build",
         },
@@ -791,19 +893,21 @@ describe("center-worker contract", () => {
     });
   });
 
-  it("local build mutation sends a build command to one connected agent", async () => {
+  it("local build mutation sends a build command to the requested machine agent", async () => {
     const harness = createHarness();
     const firstAgent = new RecordingSocket();
     const secondAgent = new RecordingSocket();
-    harness.live.addAgent(firstAgent);
-    harness.live.addAgent(secondAgent);
+    harness.live.addAgent(firstAgent, "machine.first");
+    harness.live.addAgent(secondAgent, "machine.second");
 
     await expect(
       harness.workspace.mutate({
         workspaceId: "workspace.local",
         mutation: "request_local_build",
         payload: {
+          machineId: "machine.second",
           contentId: "content.home",
+          contentRevision: "revision-1",
           cwd: "/workspace/content",
           command: "corepack pnpm --filter @lanedeck/content build",
         },
@@ -813,10 +917,14 @@ describe("center-worker contract", () => {
       diagnostics: [],
     });
 
-    expect(
-      firstAgent.decodedMessages().length +
-        secondAgent.decodedMessages().length,
-    ).toBe(1);
+    expect(firstAgent.decodedMessages()).toEqual([]);
+    expect(secondAgent.decodedMessages()).toContainEqual(
+      expect.objectContaining({
+        type: "build_content",
+        machineId: "machine.second",
+        contentRevision: "revision-1",
+      }),
+    );
   });
 
   it("lane config mutation stores revision and asks agents to reload", async () => {
