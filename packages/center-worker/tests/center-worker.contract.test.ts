@@ -578,6 +578,36 @@ describe("center-worker contract", () => {
     });
   });
 
+  it("GET /content rejects encoded backslash inside asset path segments", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/content/revision-1/assets/my%5Clogo.svg",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_path",
+      diagnostics: [expect.objectContaining({ path: "path" })],
+    });
+  });
+
+  it("GET /content rejects malformed encoded path segments", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      new Request("https://center.local/content/revision-1/assets/my%logo.svg"),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_path",
+      diagnostics: [expect.objectContaining({ path: "path" })],
+    });
+  });
+
   it("agent WebSocket rejects missing agent token before coordinator fetch", async () => {
     let fetched = false;
     const response = await handleRequest(
