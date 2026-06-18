@@ -132,6 +132,12 @@ where
     }
 
     pub fn replace_config(&mut self, config: LaneConfig) -> Result<(), EngineError> {
+        if config.lane_id != self.config.lane_id {
+            return Err(EngineError::InvalidConfig(format!(
+                "replacement laneId {} must match existing laneId {}",
+                config.lane_id, self.config.lane_id
+            )));
+        }
         let (max_records, max_duration) = frame_limits(&config)?;
 
         self.config = config;

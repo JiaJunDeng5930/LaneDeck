@@ -5,6 +5,8 @@ use lanedeck_protocol::{Diagnostic, FrameRecord, IngestBatch, LaneConfig};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value;
 
+use crate::AgentError;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SpoolEntryId(String);
@@ -12,6 +14,28 @@ pub struct SpoolEntryId(String);
 impl From<&str> for SpoolEntryId {
     fn from(value: &str) -> Self {
         Self(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ControlMessageId(String);
+
+impl From<&str> for ControlMessageId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<String> for ControlMessageId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl ControlMessageId {
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -193,19 +217,25 @@ pub struct FlushReport {
 )]
 pub enum ControlMessage {
     ReloadLaneConfig {
+        message_id: ControlMessageId,
         config: LaneConfig,
     },
     BuildContent {
+        message_id: ControlMessageId,
         content_id: String,
         cwd: PathBuf,
         command: String,
     },
     ApplyLocalChange {
+        message_id: ControlMessageId,
         path: PathBuf,
         body: Value,
     },
-    Heartbeat,
+    Heartbeat {
+        message_id: ControlMessageId,
+    },
     Unknown {
+        message_id: ControlMessageId,
         message_type: String,
     },
 }
@@ -224,22 +254,27 @@ impl<'de> Deserialize<'de> for ControlMessage {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
+        let message_id = take_control_field(object, "messageId")?;
 
         match message_type.as_str() {
             "reload_lane_config" => Ok(Self::ReloadLaneConfig {
+                message_id,
                 config: take_control_field(object, "config")?,
             }),
             "build_content" => Ok(Self::BuildContent {
+                message_id,
                 content_id: take_control_field(object, "contentId")?,
                 cwd: take_control_field(object, "cwd")?,
                 command: take_control_field(object, "command")?,
             }),
             "apply_local_change" => Ok(Self::ApplyLocalChange {
+                message_id,
                 path: take_control_field(object, "path")?,
                 body: take_control_field(object, "body")?,
             }),
-            "heartbeat" => Ok(Self::Heartbeat),
+            "heartbeat" => Ok(Self::Heartbeat { message_id }),
             other => Ok(Self::Unknown {
+                message_id,
                 message_type: other.to_string(),
             }),
         }
@@ -261,33 +296,62 @@ where
 }
 
 impl ControlMessage {
-    pub fn reload_lane_config(config: LaneConfig) -> Self {
-        Self::ReloadLaneConfig { config }
+    pub fn reload_lane_config(message_id: impl Into<ControlMessageId>, config: LaneConfig) -> Self {
+        Self::ReloadLaneConfig {
+            message_id: message_id.into(),
+            config,
+        }
     }
 
     pub fn build_content(
+        message_id: impl Into<ControlMessageId>,
         content_id: impl Into<String>,
         cwd: PathBuf,
         command: impl Into<String>,
     ) -> Self {
         Self::BuildContent {
+            message_id: message_id.into(),
             content_id: content_id.into(),
             cwd,
             command: command.into(),
         }
     }
 
-    pub fn apply_local_change(path: PathBuf, body: Value) -> Self {
-        Self::ApplyLocalChange { path, body }
+    pub fn apply_local_change(
+        message_id: impl Into<ControlMessageId>,
+        path: PathBuf,
+        body: Value,
+    ) -> Self {
+        Self::ApplyLocalChange {
+            message_id: message_id.into(),
+            path,
+            body,
+        }
     }
 
-    pub fn heartbeat() -> Self {
-        Self::Heartbeat
+    pub fn heartbeat(message_id: impl Into<ControlMessageId>) -> Self {
+        Self::Heartbeat {
+            message_id: message_id.into(),
+        }
     }
 
-    pub fn unknown(message_type: impl Into<String>) -> Self {
+    pub fn unknown(
+        message_id: impl Into<ControlMessageId>,
+        message_type: impl Into<String>,
+    ) -> Self {
         Self::Unknown {
+            message_id: message_id.into(),
             message_type: message_type.into(),
+        }
+    }
+
+    pub fn message_id(&self) -> &ControlMessageId {
+        match self {
+            Self::ReloadLaneConfig { message_id, .. }
+            | Self::BuildContent { message_id, .. }
+            | Self::ApplyLocalChange { message_id, .. }
+            | Self::Heartbeat { message_id }
+            | Self::Unknown { message_id, .. } => message_id,
         }
     }
 
@@ -296,30 +360,45 @@ impl ControlMessage {
             Self::ReloadLaneConfig { .. } => "reload_lane_config",
             Self::BuildContent { .. } => "build_content",
             Self::ApplyLocalChange { .. } => "apply_local_change",
-            Self::Heartbeat => "heartbeat",
+            Self::Heartbeat { .. } => "heartbeat",
             Self::Unknown { message_type, .. } => message_type,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlMessageRecord {
+    InProgress,
+    Completed(Result<ControlReply, AgentError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlReply {
     pub accepted: bool,
+    pub message_id: ControlMessageId,
     pub message_type: String,
 }
 
 impl ControlReply {
-    pub fn accepted(message_type: impl Into<String>) -> Self {
+    pub fn accepted(
+        message_id: impl Into<ControlMessageId>,
+        message_type: impl Into<String>,
+    ) -> Self {
         Self {
             accepted: true,
+            message_id: message_id.into(),
             message_type: message_type.into(),
         }
     }
 
-    pub fn unknown(message_type: impl Into<String>) -> Self {
+    pub fn unknown(
+        message_id: impl Into<ControlMessageId>,
+        message_type: impl Into<String>,
+    ) -> Self {
         Self {
             accepted: false,
+            message_id: message_id.into(),
             message_type: message_type.into(),
         }
     }

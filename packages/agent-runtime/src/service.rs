@@ -263,12 +263,39 @@ where
         &mut self,
         message: ControlMessage,
     ) -> Result<ControlReply, AgentError> {
+        let message_id = message.message_id().clone();
+
+        match self.spool.load_control_message(&message_id)? {
+            Some(crate::ControlMessageRecord::Completed(result)) => return result,
+            Some(crate::ControlMessageRecord::InProgress) => {
+                return Err(AgentError::spool(format!(
+                    "control message {} is already in progress",
+                    message_id.as_str()
+                )));
+            }
+            None => {}
+        }
+
+        self.spool
+            .mark_control_message_in_progress(message_id.clone())?;
+        let result = self.execute_control_message(message).await;
+        self.spool
+            .mark_control_message_completed(message_id, result.clone())?;
+
+        result
+    }
+
+    async fn execute_control_message(
+        &mut self,
+        message: ControlMessage,
+    ) -> Result<ControlReply, AgentError> {
         match message {
-            ControlMessage::ReloadLaneConfig { config } => {
+            ControlMessage::ReloadLaneConfig { message_id, config } => {
                 self.reload_lane_config(config)?;
-                Ok(ControlReply::accepted("reload_lane_config"))
+                Ok(ControlReply::accepted(message_id, "reload_lane_config"))
             }
             ControlMessage::BuildContent {
+                message_id,
                 content_id,
                 cwd,
                 command,
@@ -285,9 +312,13 @@ where
                     side_effect_policy: ScriptSideEffectPolicy::ContentBuildBoundary,
                 };
                 self.runner.run_script(request)?;
-                Ok(ControlReply::accepted("build_content"))
+                Ok(ControlReply::accepted(message_id, "build_content"))
             }
-            ControlMessage::ApplyLocalChange { path, body } => {
+            ControlMessage::ApplyLocalChange {
+                message_id,
+                path,
+                body,
+            } => {
                 let cwd = path_parent_or_dot(&path);
                 let command = serde_json::to_string(&serde_json::json!({
                     "type": "apply_local_change",
@@ -307,10 +338,15 @@ where
                     side_effect_policy: ScriptSideEffectPolicy::LocalContentWriteBoundary,
                 };
                 self.runner.run_script(request)?;
-                Ok(ControlReply::accepted("apply_local_change"))
+                Ok(ControlReply::accepted(message_id, "apply_local_change"))
             }
-            ControlMessage::Heartbeat => Ok(ControlReply::accepted("heartbeat")),
-            ControlMessage::Unknown { message_type } => Ok(ControlReply::unknown(message_type)),
+            ControlMessage::Heartbeat { message_id } => {
+                Ok(ControlReply::accepted(message_id, "heartbeat"))
+            }
+            ControlMessage::Unknown {
+                message_id,
+                message_type,
+            } => Ok(ControlReply::unknown(message_id, message_type)),
         }
     }
 

@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use lanedeck_protocol::{Diagnostic, IngestAck, IngestBatch};
 
 use crate::{
-    AgentError, ControlConnectRequest, ControlSession, RetryReason, ScriptRunOutput,
-    ScriptRunRequest, SpoolEntry, SpoolEntryId,
+    AgentError, ControlConnectRequest, ControlMessageId, ControlMessageRecord, ControlSession,
+    RetryReason, ScriptRunOutput, ScriptRunRequest, SpoolEntry, SpoolEntryId,
 };
 
 #[async_trait]
@@ -18,6 +18,22 @@ pub trait CenterClient {
 
 pub trait LocalSpool {
     fn load_lane_frame_cursor(&mut self, lane_id: &str) -> Result<u64, AgentError>;
+
+    fn load_control_message(
+        &mut self,
+        message_id: &ControlMessageId,
+    ) -> Result<Option<ControlMessageRecord>, AgentError>;
+
+    fn mark_control_message_in_progress(
+        &mut self,
+        message_id: ControlMessageId,
+    ) -> Result<(), AgentError>;
+
+    fn mark_control_message_completed(
+        &mut self,
+        message_id: ControlMessageId,
+        result: Result<crate::ControlReply, AgentError>,
+    ) -> Result<(), AgentError>;
 
     fn enqueue(&mut self, batch: IngestBatch) -> Result<SpoolEntryId, AgentError>;
 

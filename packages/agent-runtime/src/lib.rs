@@ -11,9 +11,10 @@ pub use error::AgentError;
 pub use interfaces::{CenterClient, LocalSpool, ScriptRunner};
 pub use service::AgentService;
 pub use types::{
-    AgentRunReport, ControlConnectRequest, ControlMessage, ControlReply, ControlSession,
-    FlushReport, RetryReason, ScriptPurpose, ScriptRunOutput, ScriptRunRequest,
-    ScriptSideEffectPolicy, SpoolEntry, SpoolEntryId, SpoolEntryState, WorkingDirectory,
+    AgentRunReport, ControlConnectRequest, ControlMessage, ControlMessageId, ControlMessageRecord,
+    ControlReply, ControlSession, FlushReport, RetryReason, ScriptPurpose, ScriptRunOutput,
+    ScriptRunRequest, ScriptSideEffectPolicy, SpoolEntry, SpoolEntryId, SpoolEntryState,
+    WorkingDirectory,
 };
 
 pub const PACKAGE_NAME: &str = "lanedeck-agent-runtime";
