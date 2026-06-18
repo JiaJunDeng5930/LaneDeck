@@ -396,6 +396,47 @@ describe("center-worker contract", () => {
     expect(harness.storage.mutations).toHaveLength(0);
   });
 
+  it("POST /api/ai/mutation rejects backslash object paths before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_content",
+          payload: {
+            path: "src/dashboard.tsx",
+            contentPath: "assets\\logo.svg",
+            source: "<h1>bad path</h1>",
+          },
+        },
+        "ai-token",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => {
+            fetched = true;
+            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
+              "workspace.local",
+            );
+          },
+        },
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "payload.contentPath" })],
+    });
+    expect(fetched).toBe(false);
+  });
+
   it("invalid local build mutation payload returns diagnostics without mutation log writes", async () => {
     const harness = createHarness();
     const response = await handleRequest(

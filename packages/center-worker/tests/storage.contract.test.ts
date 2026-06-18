@@ -164,6 +164,62 @@ describe("center-worker storage contract", () => {
       'const logo = "/content/revision-1/assets/logo.svg";',
     );
   });
+
+  it("rejects backslash separators in normalized R2 object paths", async () => {
+    const store = new R2ContentStore({} as R2Bucket);
+    const write = {
+      workspaceId: "workspace.local",
+      revision: "revision-1",
+      sourcePath: "src/dashboard.tsx",
+      contentPath: "index.html",
+      source: "<h1>patched</h1>",
+    };
+
+    await expect(
+      store.writeContentSource({
+        ...write,
+        sourcePath: "src\\dashboard.tsx",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "payload.path" })],
+    });
+    await expect(
+      store.writeContentSource({
+        ...write,
+        contentPath: "assets\\logo.svg",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "payload.contentPath" })],
+    });
+    await expect(
+      store.readContentAsset("revision\\1", "index.html"),
+    ).rejects.toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "revision" })],
+    });
+    await expect(
+      store.readContentAsset("revision-1", "assets\\logo.svg"),
+    ).rejects.toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "assetPath" })],
+    });
+
+    let rewriteError: unknown;
+    try {
+      rewriteViteAssetReferences(
+        'const logo = "/assets/logo.svg";',
+        "bad\\rev",
+      );
+    } catch (error) {
+      rewriteError = error;
+    }
+    expect(rewriteError).toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "revision" })],
+    });
+  });
 });
 
 function contentRevision(
