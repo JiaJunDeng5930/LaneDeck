@@ -371,13 +371,10 @@ describe("center-worker contract", () => {
     let fetchedPath = "";
     const response = await handleRequest(
       new Request(
-        "https://center.local/ws/browser?workspaceId=workspace.local",
+        "https://center.local/ws/browser?workspaceId=workspace.local&readToken=read-token",
         {
           method: "GET",
-          headers: {
-            authorization: "Bearer read-token",
-            upgrade: "websocket",
-          },
+          headers: { upgrade: "websocket" },
         },
       ),
       {

@@ -89,6 +89,32 @@ describe("center-worker storage contract", () => {
     ).toBe(1);
   });
 
+  it("orders current state frames by normalized instants", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveIngestBatch(
+      ingestBatch([
+        {
+          ...frame(1),
+          closedAt: "2026-06-10T10:00:00Z",
+        },
+        {
+          ...frame(2),
+          closedAt: "2026-06-10T10:00:00.001Z",
+        },
+      ]),
+      "2026-06-10T10:00:20.000Z",
+    );
+
+    const state = await storage.getCurrentState("workspace.local");
+
+    expect(state.frames).toEqual([
+      expect.objectContaining({ frameNo: 2 }),
+      expect.objectContaining({ frameNo: 1 }),
+    ]);
+  });
+
   it("rewrites root Vite asset URLs in HTML and CSS text", () => {
     expect(
       rewriteViteAssetReferences(
@@ -118,6 +144,24 @@ describe("center-worker storage contract", () => {
     expect(response).not.toBeNull();
     await expect(response?.text()).resolves.toBe(
       "@font-face { src: url(/content/revision-1/assets/font.woff2); }",
+    );
+  });
+
+  it("rewrites JavaScript asset responses before serving them", async () => {
+    const bucket = new FakeR2Bucket();
+    bucket.putObject(
+      "content/revision-1/assets/index.js",
+      'const logo = "/assets/logo.svg";',
+      "text/javascript; charset=utf-8",
+    );
+
+    const response = await new R2ContentStore(
+      bucket as unknown as R2Bucket,
+    ).readContentAsset("revision-1", "assets/index.js");
+
+    expect(response).not.toBeNull();
+    await expect(response?.text()).resolves.toBe(
+      'const logo = "/content/revision-1/assets/logo.svg";',
     );
   });
 });
@@ -224,6 +268,7 @@ interface FrameRow {
   frame_no: number;
   opened_at: string;
   closed_at: string;
+  closed_at_epoch_ms: number;
   trigger_kind: string;
   record_count: number;
   summary_json: string;
@@ -274,6 +319,7 @@ class FakeD1Database {
     }
 
     if (sql.includes("INSERT OR REPLACE INTO frames")) {
+      const hasClosedAtEpoch = sql.includes("closed_at_epoch_ms");
       const [
         workspaceId,
         machineId,
@@ -283,10 +329,11 @@ class FakeD1Database {
         frameNo,
         openedAt,
         closedAt,
-        triggerKind,
-        recordCount,
-        summaryJson,
       ] = bindings as string[];
+      const closedAtEpochMs = hasClosedAtEpoch ? Number(bindings[8]) : 0;
+      const triggerKind = String(bindings[hasClosedAtEpoch ? 9 : 8]);
+      const recordCount = Number(bindings[hasClosedAtEpoch ? 10 : 9]);
+      const summaryJson = String(bindings[hasClosedAtEpoch ? 11 : 10]);
       this.frames.set(
         frameKey(workspaceId, machineId, batchId, laneId, stage, frameNo),
         {
@@ -298,6 +345,7 @@ class FakeD1Database {
           frame_no: Number(frameNo),
           opened_at: openedAt,
           closed_at: closedAt,
+          closed_at_epoch_ms: Number(closedAtEpochMs),
           trigger_kind: triggerKind,
           record_count: Number(recordCount),
           summary_json: summaryJson,
@@ -414,10 +462,16 @@ class FakeD1Database {
       const results = [...this.frames.values()]
         .filter((row) => row.workspace_id === workspaceId)
         .sort(
-          (left, right) =>
-            right.closed_at.localeCompare(left.closed_at) ||
-            right.batch_id.localeCompare(left.batch_id) ||
-            left.lane_id.localeCompare(right.lane_id),
+          (left, right) => {
+            const closedAtOrder = sql.includes("closed_at_epoch_ms")
+              ? right.closed_at_epoch_ms - left.closed_at_epoch_ms
+              : right.closed_at.localeCompare(left.closed_at);
+            return (
+              closedAtOrder ||
+              right.batch_id.localeCompare(left.batch_id) ||
+              left.lane_id.localeCompare(right.lane_id)
+            );
+          },
         );
       return { results: results as T[] };
     }
