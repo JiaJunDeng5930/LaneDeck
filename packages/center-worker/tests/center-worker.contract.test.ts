@@ -40,12 +40,16 @@ describe("center-worker contract", () => {
   it("POST /api/ingest persists structured rows and returns ack", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      jsonRequest("/api/ingest", {
-        workspaceId: "workspace.local",
-        machineId: "machine.local",
-        batchId: "batch-1",
-        frames: [validFrame],
-      }),
+      jsonRequest(
+        "/api/ingest",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          batchId: "batch-1",
+          frames: [validFrame],
+        },
+        "agent-token",
+      ),
       harness.env,
     );
 
@@ -62,11 +66,15 @@ describe("center-worker contract", () => {
   it("invalid ingest payload returns validation diagnostics", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      jsonRequest("/api/ingest", {
-        workspaceId: "workspace.local",
-        machineId: "machine.local",
-        batchId: "batch-1",
-      }),
+      jsonRequest(
+        "/api/ingest",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          batchId: "batch-1",
+        },
+        "agent-token",
+      ),
       harness.env,
     );
 
@@ -75,6 +83,26 @@ describe("center-worker contract", () => {
       error: "protocol_validation_failed",
       diagnostics: [expect.objectContaining({ path: "frames" })],
     });
+  });
+
+  it("POST /api/ingest rejects missing agent token before writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest("/api/ingest", {
+        workspaceId: "workspace.local",
+        machineId: "machine.local",
+        batchId: "batch-1",
+        frames: [validFrame],
+      }),
+      harness.env,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "authentication_failed",
+      diagnostics: [expect.objectContaining({ path: "authorization" })],
+    });
+    expect(harness.storage.writeCount).toBe(0);
   });
 
   it("POST /api/query reads current state without mutation", async () => {
@@ -154,16 +182,20 @@ describe("center-worker contract", () => {
   it("POST /api/ai/mutation writes content source to R2 and metadata to D1", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      jsonRequest("/api/ai/mutation", {
-        workspaceId: "workspace.local",
-        mutation: "patch_content",
-        payload: {
-          path: "src/dashboard.tsx",
-          contentPath: "index.html",
-          source: "<h1>patched</h1>",
-          metadata: { pickId: "content.home" },
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_content",
+          payload: {
+            path: "src/dashboard.tsx",
+            contentPath: "index.html",
+            source: "<h1>patched</h1>",
+            metadata: { pickId: "content.home" },
+          },
         },
-      }),
+        "ai-token",
+      ),
       harness.env,
     );
 
@@ -196,13 +228,17 @@ describe("center-worker contract", () => {
   it("invalid content mutation payload returns diagnostics without mutation log writes", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      jsonRequest("/api/ai/mutation", {
-        workspaceId: "workspace.local",
-        mutation: "patch_content",
-        payload: {
-          source: "<h1>missing path</h1>",
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_content",
+          payload: {
+            source: "<h1>missing path</h1>",
+          },
         },
-      }),
+        "ai-token",
+      ),
       harness.env,
     );
 
@@ -210,6 +246,31 @@ describe("center-worker contract", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_mutation_payload",
       diagnostics: [expect.objectContaining({ path: "payload.path" })],
+    });
+    expect(harness.storage.mutations).toHaveLength(0);
+  });
+
+  it("POST /api/ai/mutation rejects wrong token before payload validation", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_content",
+          payload: {
+            source: "<h1>missing path</h1>",
+          },
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "authentication_failed",
+      diagnostics: [expect.objectContaining({ path: "authorization" })],
     });
     expect(harness.storage.mutations).toHaveLength(0);
   });
@@ -256,6 +317,33 @@ describe("center-worker contract", () => {
 
     expect(response.status).toBe(204);
     expect(fetchedPath).toBe("/ws/browser");
+  });
+
+  it("agent WebSocket rejects missing agent token before coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/ws/agent?workspaceId=workspace.local", {
+        method: "GET",
+        headers: { upgrade: "websocket" },
+      }),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => ({
+            fetch: async () => {
+              fetched = true;
+              return new Response(null, { status: 204 });
+            },
+          }),
+        },
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetched).toBe(false);
   });
 
   it("browser WSS receives content_changed after content mutation", async () => {
@@ -370,15 +458,21 @@ function createHarness() {
     },
     LANEDECK_DB: {},
     LANEDECK_BUCKET: {},
+    LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+    LANEDECK_AGENT_TOKEN: "agent-token",
   };
 
   return { storage, objects, live, workspace, env };
 }
 
-function jsonRequest(path: string, body: JsonObject): Request {
+function jsonRequest(path: string, body: JsonObject, token?: string): Request {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (token !== undefined) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
   return new Request(`https://center.local${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
 }
