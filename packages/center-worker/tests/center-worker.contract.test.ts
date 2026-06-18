@@ -103,6 +103,65 @@ describe("center-worker contract", () => {
     });
   });
 
+  it("ingest rejects duplicate frame identities before writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ingest",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          batchId: "batch-1",
+          frames: [validFrame, { ...validFrame, summary: { duplicate: true } }],
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_ingest_payload",
+      diagnostics: [expect.objectContaining({ path: "frames.1" })],
+    });
+    expect(harness.storage.writeCount).toBe(0);
+  });
+
+  it("ingest rejects duplicate record ids within a frame before writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ingest",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          batchId: "batch-1",
+          frames: [
+            {
+              ...validFrame,
+              recordCount: 2,
+              records: [
+                validFrame.records[0],
+                { ...validFrame.records[0], body: { duplicate: true } },
+              ],
+            },
+          ],
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_ingest_payload",
+      diagnostics: [
+        expect.objectContaining({ path: "frames.0.records.1.id" }),
+      ],
+    });
+    expect(harness.storage.writeCount).toBe(0);
+  });
+
   it("POST /api/ingest rejects missing agent token before writes", async () => {
     const harness = createHarness();
     const response = await handleRequest(
