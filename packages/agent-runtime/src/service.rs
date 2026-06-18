@@ -1,5 +1,8 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, Utc};
 use lanedeck_lane_engine::{
@@ -18,6 +21,7 @@ use crate::{
 };
 
 const BUILD_CONTENT_TIMEOUT_SECONDS: i64 = 300;
+static NEXT_RUNTIME_SEED: AtomicU64 = AtomicU64::new(1);
 
 pub struct AgentService<C, P, R> {
     center: C,
@@ -25,9 +29,11 @@ pub struct AgentService<C, P, R> {
     runner: Arc<R>,
     workspace_id: String,
     machine_id: String,
+    runtime_seed: String,
     flush_limit: usize,
     lanes: Vec<LaneRuntime<R>>,
     next_batch_no: u64,
+    retained_batches: VecDeque<IngestBatch>,
 }
 
 struct LaneRuntime<R> {
@@ -40,6 +46,7 @@ struct LaneRuntime<R> {
 #[derive(Clone, Default)]
 struct ServiceHistoryStore {
     inner: Arc<Mutex<ServiceHistoryState>>,
+    limits: HistoryLimits,
 }
 
 #[derive(Default)]
@@ -49,6 +56,13 @@ struct ServiceHistoryState {
     event_frames: Vec<Frame>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct HistoryLimits {
+    upstream_frames: usize,
+    metric_frames: usize,
+    event_frames: usize,
+}
+
 impl<C, P, R> AgentService<C, P, R>
 where
     C: CenterClient,
@@ -56,6 +70,10 @@ where
     R: ScriptRunner,
 {
     pub fn new(config: AgentConfig, center: C, spool: P, runner: R) -> Result<Self, AgentError> {
+        if config.flush.max_batch_size == 0 {
+            return Err(AgentError::config("flush.maxBatchSize must be positive"));
+        }
+
         let runner = Arc::new(runner);
         let mut lanes = Vec::with_capacity(config.lanes.len());
 
@@ -76,14 +94,17 @@ where
             runner,
             workspace_id: config.workspace_id,
             machine_id: config.machine_id,
+            runtime_seed: new_runtime_seed(),
             flush_limit: config.flush.max_batch_size,
             lanes,
             next_batch_no: 1,
+            retained_batches: VecDeque::new(),
         })
     }
 
     pub async fn run_once(&mut self, now: DateTime<Utc>) -> Result<AgentRunReport, AgentError> {
         let mut report = AgentRunReport::default();
+        self.enqueue_retained_batches(&mut report)?;
 
         for lane_index in 0..self.lanes.len() {
             if !self.lanes[lane_index].is_due(now) {
@@ -132,7 +153,7 @@ where
             }
 
             let batch = self.next_batch(frames);
-            self.spool.enqueue(batch)?;
+            self.enqueue_or_retain(batch)?;
             report.enqueued_batch_count += 1;
         }
 
@@ -231,26 +252,24 @@ where
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
         validate_script_raw_stage(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
-        if let Some(existing) = self
+        let existing = self
             .lanes
             .iter_mut()
             .find(|existing| existing.lane.lane_id == lane_id)
-        {
-            let mut runtime =
-                LaneRuntime::new(lane_config, existing.schedule_interval, self.runner.clone())?;
-            runtime.next_run_at = existing.next_run_at;
-            *existing = runtime;
-        } else {
-            let runtime =
-                LaneRuntime::new(lane_config, Duration::seconds(60), self.runner.clone())?;
-            self.lanes.push(runtime);
-        }
+            .ok_or_else(|| AgentError::config(format!("lane {lane_id} is not active")))?;
+        let mut runtime =
+            LaneRuntime::new(lane_config, existing.schedule_interval, self.runner.clone())?;
+        runtime.next_run_at = existing.next_run_at;
+        *existing = runtime;
 
         Ok(())
     }
 
     fn next_batch(&mut self, frames: Vec<Frame>) -> IngestBatch {
-        let batch_id = format!("batch-{}", self.next_batch_no);
+        let batch_id = format!(
+            "{}:{}:{}:{}",
+            self.workspace_id, self.machine_id, self.runtime_seed, self.next_batch_no
+        );
         self.next_batch_no += 1;
 
         IngestBatch {
@@ -258,6 +277,37 @@ where
             machine_id: self.machine_id.clone(),
             batch_id,
             frames,
+        }
+    }
+
+    fn enqueue_retained_batches(&mut self, report: &mut AgentRunReport) -> Result<(), AgentError> {
+        let retained_count = self.retained_batches.len();
+        for _ in 0..retained_count {
+            let batch = self
+                .retained_batches
+                .pop_front()
+                .expect("retained batch count was captured");
+            match self.spool.enqueue(batch.clone()) {
+                Ok(_) => report.enqueued_batch_count += 1,
+                Err(error) => {
+                    let error = retained_enqueue_error(&batch, error);
+                    self.retained_batches.push_front(batch);
+                    return Err(error);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn enqueue_or_retain(&mut self, batch: IngestBatch) -> Result<(), AgentError> {
+        match self.spool.enqueue(batch.clone()) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let error = retained_enqueue_error(&batch, error);
+                self.retained_batches.push_back(batch);
+                Err(error)
+            }
         }
     }
 }
@@ -302,7 +352,7 @@ where
     ) -> Result<Self, AgentError> {
         let engine = LaneEngine::new(
             lane.clone(),
-            ServiceHistoryStore::default(),
+            ServiceHistoryStore::with_limits(history_limits(&lane)),
             ServiceStageRunner { runner },
         )
         .map_err(map_engine_error)?;
@@ -325,6 +375,15 @@ where
     }
 }
 
+impl ServiceHistoryStore {
+    fn with_limits(limits: HistoryLimits) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ServiceHistoryState::default())),
+            limits,
+        }
+    }
+}
+
 impl HistoryStore for ServiceHistoryStore {
     fn load_history(&self, request: HistoryRequest) -> Result<StageHistory, EngineError> {
         let inner = self
@@ -344,9 +403,18 @@ impl HistoryStore for ServiceHistoryStore {
             .lock()
             .map_err(|error| EngineError::Store(error.to_string()))?;
         match frame.stage {
-            StageKind::Raw => inner.upstream_frames.push(frame),
-            StageKind::Metric => inner.metric_frames.push(frame),
-            StageKind::Event => inner.event_frames.push(frame),
+            StageKind::Raw => {
+                inner.upstream_frames.push(frame);
+                retain_tail(&mut inner.upstream_frames, self.limits.upstream_frames);
+            }
+            StageKind::Metric => {
+                inner.metric_frames.push(frame);
+                retain_tail(&mut inner.metric_frames, self.limits.metric_frames);
+            }
+            StageKind::Event => {
+                inner.event_frames.push(frame);
+                retain_tail(&mut inner.event_frames, self.limits.event_frames);
+            }
         }
 
         Ok(())
@@ -569,6 +637,46 @@ fn tail(frames: &[Frame], limit: usize) -> Vec<Frame> {
         .skip(frames.len().saturating_sub(limit))
         .cloned()
         .collect()
+}
+
+fn retain_tail(frames: &mut Vec<Frame>, limit: usize) {
+    let drop_count = frames.len().saturating_sub(limit);
+    if drop_count > 0 {
+        frames.drain(0..drop_count);
+    }
+}
+
+fn history_limits(lane: &LaneConfig) -> HistoryLimits {
+    HistoryLimits {
+        upstream_frames: max_history_limit(lane, "upstreamFrames"),
+        metric_frames: max_history_limit(lane, "metricFrames"),
+        event_frames: max_history_limit(lane, "eventFrames"),
+    }
+}
+
+fn max_history_limit(lane: &LaneConfig, key: &str) -> usize {
+    [&lane.metric_stage.settings, &lane.event_stage.settings]
+        .into_iter()
+        .filter_map(|settings| settings["history"][key].as_u64())
+        .filter_map(|value| usize::try_from(value).ok())
+        .max()
+        .unwrap_or(0)
+}
+
+fn new_runtime_seed() -> String {
+    let sequence = NEXT_RUNTIME_SEED.fetch_add(1, Ordering::Relaxed);
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("runtime-{started_at}-{sequence}")
+}
+
+fn retained_enqueue_error(batch: &IngestBatch, error: AgentError) -> AgentError {
+    AgentError::spool(format!(
+        "local spool enqueue failed for ingest batch {}; agent-runtime retained ownership for next run retry: {error}",
+        batch.batch_id
+    ))
 }
 
 fn map_engine_error(error: EngineError) -> AgentError {
