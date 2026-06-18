@@ -10,8 +10,9 @@ use lanedeck_protocol::{LaneConfig, StageMode};
 use serde_json::json;
 
 use contract_helpers::{
-    CenterProbe, ScriptRunnerProbe, SpoolProbe, agent_config_with_lane_config, content_root,
-    diagnostic_script_output, downstream_builtin_stage_cases,
+    CenterProbe, ScriptRunnerProbe, SpoolProbe, agent_config_with_lane_config,
+    content_build_script_output, content_root, diagnostic_script_output,
+    downstream_builtin_stage_cases,
     downstream_script_stage_missing_setting_cases, duplicate_nested_lane_identity_agent_config,
     duration, empty_metric_agent_config, ingest_batch, instant,
     mismatched_lane_identity_agent_config, pending_spool_entry, reloaded_script_lane_config,
@@ -693,6 +694,83 @@ async fn build_content_control_message_calls_content_build_handler() {
         request.command,
         "corepack pnpm --filter @lanedeck/content build"
     );
+}
+
+#[tokio::test]
+async fn build_content_control_message_posts_build_completion() {
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center.clone(), spool, runner.clone())
+            .unwrap();
+
+    let reply = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-main",
+            "machine.local",
+            "dashboard-main",
+            "revision-1",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-build-main", "build_content")
+    );
+    let request = runner.requests().remove(0);
+    assert_eq!(
+        request.input.unwrap(),
+        json!({
+            "workspaceId": "workspace.local",
+            "machineId": "machine.local",
+            "buildRequestId": "control-build-main",
+            "contentId": "dashboard-main",
+            "contentRevision": "revision-1"
+        })
+    );
+    assert_eq!(center.posted_build_completions().len(), 1);
+    let completion = center.posted_build_completions().remove(0);
+    assert_eq!(completion.workspace_id, "workspace.local");
+    assert_eq!(completion.machine_id, "machine.local");
+    assert_eq!(completion.build_request_id, "control-build-main");
+    assert_eq!(completion.content_id, "dashboard-main");
+    assert_eq!(completion.content_revision, "revision-1");
+    assert_eq!(completion.entrypoint, "index.html");
+    assert_eq!(completion.artifacts.len(), 2);
+    assert_eq!(completion.artifacts[0].path, "index.html");
+}
+
+#[tokio::test]
+async fn build_content_control_message_returns_error_when_completion_upload_fails() {
+    let center = CenterProbe::failing_network();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center.clone(), spool, runner.clone())
+            .unwrap();
+
+    let error = service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-center-failure",
+            "machine.local",
+            "dashboard-main",
+            "revision-1",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+        ))
+        .await
+        .unwrap_err();
+
+    match error {
+        AgentError::Network(message) => assert!(message.contains("center unreachable")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(runner.requests().len(), 1);
+    assert_eq!(center.posted_build_completions().len(), 1);
 }
 
 #[tokio::test]

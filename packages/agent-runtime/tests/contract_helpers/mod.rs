@@ -9,7 +9,10 @@ use lanedeck_agent_runtime::{
     ControlMessageRecord, ControlSession, LocalSpool, RetryReason, ScriptRunOutput,
     ScriptRunRequest, ScriptRunner, SpoolEntry, SpoolEntryId,
 };
-use lanedeck_protocol::{Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch, LaneConfig};
+use lanedeck_protocol::{
+    ContentBuildCompleteRequest, Diagnostic, Frame, FrameRecord, IngestAck, IngestBatch,
+    LaneConfig,
+};
 use serde_json::{Value, json};
 
 pub fn instant(seconds: i64) -> DateTime<Utc> {
@@ -479,6 +482,23 @@ pub fn diagnostic_script_output(now: DateTime<Utc>) -> ScriptRunOutput {
     }))
 }
 
+pub fn content_build_script_output() -> ScriptRunOutput {
+    from_json(json!({
+        "entrypoint": "index.html",
+        "artifacts": [
+            {
+                "path": "index.html",
+                "body": "<main>built</main>",
+                "contentType": "text/html; charset=utf-8"
+            },
+            {
+                "path": "assets/index.js",
+                "body": "console.log('ok')"
+            }
+        ]
+    }))
+}
+
 #[derive(Clone)]
 pub struct CenterProbe {
     inner: Arc<Mutex<CenterProbeState>>,
@@ -488,6 +508,7 @@ pub struct CenterProbe {
 struct CenterProbeState {
     outcome: CenterPostOutcome,
     posted_batches: Vec<IngestBatch>,
+    posted_build_completions: Vec<ContentBuildCompleteRequest>,
     control_connect_requests: Vec<ControlConnectRequest>,
 }
 
@@ -533,6 +554,7 @@ impl CenterProbe {
             inner: Arc::new(Mutex::new(CenterProbeState {
                 outcome,
                 posted_batches: Vec::new(),
+                posted_build_completions: Vec::new(),
                 control_connect_requests: Vec::new(),
             })),
         }
@@ -540,6 +562,14 @@ impl CenterProbe {
 
     pub fn posted_batches(&self) -> Vec<IngestBatch> {
         self.inner.lock().unwrap().posted_batches.clone()
+    }
+
+    pub fn posted_build_completions(&self) -> Vec<ContentBuildCompleteRequest> {
+        self.inner
+            .lock()
+            .unwrap()
+            .posted_build_completions
+            .clone()
     }
 
     pub fn control_connect_requests(&self) -> Vec<ControlConnectRequest> {
@@ -607,6 +637,18 @@ impl CenterClient for CenterProbe {
         Ok(ControlSession {
             connected_at: instant(1_700_000_000),
         })
+    }
+
+    async fn post_content_build_complete(
+        &self,
+        request: ContentBuildCompleteRequest,
+    ) -> Result<(), AgentError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.posted_build_completions.push(request);
+        match inner.outcome {
+            CenterPostOutcome::NetworkFailure => Err(AgentError::network("center unreachable")),
+            _ => Ok(()),
+        }
     }
 }
 
