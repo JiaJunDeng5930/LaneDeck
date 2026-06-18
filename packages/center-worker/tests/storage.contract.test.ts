@@ -190,6 +190,38 @@ describe("center-worker storage contract", () => {
     );
   });
 
+  it("validates every build artifact before writing any R2 object", async () => {
+    const bucket = new FakeR2Bucket();
+    const store = new R2ContentStore(bucket as unknown as R2Bucket);
+
+    await expect(
+      store.writeContentBuildArtifacts({
+        revision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [
+          { path: "index.html", body: "<main>valid</main>" },
+          { path: "assets\\bad.js", body: "console.log('bad')" },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_object_path",
+      diagnostics: [expect.objectContaining({ path: "artifacts.1.path" })],
+    });
+    expect(bucket.objectBody("content/revision-1/index.html")).toBeNull();
+
+    await expect(
+      store.writeContentBuildArtifacts({
+        revision: "revision-2",
+        entrypoint: "index.html",
+        artifacts: [{ path: "assets/index.js", body: "console.log('ok')" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_content_build_payload",
+      diagnostics: [expect.objectContaining({ path: "entrypoint" })],
+    });
+    expect(bucket.objectBody("content/revision-2/assets/index.js")).toBeNull();
+  });
+
   it("rewrites CSS asset responses before serving them", async () => {
     const bucket = new FakeR2Bucket();
     bucket.putObject(

@@ -851,6 +851,78 @@ describe("center-worker contract", () => {
     expect(browser.decodedMessages()).toEqual([]);
   });
 
+  it("POST /api/content/build-complete returns DO validation diagnostics as JSON", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/content/build-complete",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          buildRequestId: "missing-build",
+          contentRevision: "revision-1",
+          entrypoint: "index.html",
+          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+        },
+        "agent-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_build_completion",
+      diagnostics: [expect.objectContaining({ path: "buildRequestId" })],
+    });
+  });
+
+  it("POST /api/content/build-complete converts coordinator validation results to JSON errors", async () => {
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/content/build-complete",
+        {
+          workspaceId: "workspace.local",
+          machineId: "machine.local",
+          buildRequestId: "missing-build",
+          contentRevision: "revision-1",
+          entrypoint: "index.html",
+          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+        },
+        "agent-token",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => ({
+            buildComplete: async () => ({
+              ok: false,
+              error: {
+                status: 400,
+                code: "invalid_content_build_completion",
+                diagnostics: [
+                  {
+                    path: "buildRequestId",
+                    message: "expected existing content build request",
+                  },
+                ],
+              },
+            }),
+          }),
+        },
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_build_completion",
+      diagnostics: [expect.objectContaining({ path: "buildRequestId" })],
+    });
+  });
+
   it("historical content build completion skips live broadcast and reports current diagnostic", async () => {
     const harness = createHarness(new SupersededStorage());
     const browser = new RecordingSocket();
