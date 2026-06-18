@@ -684,6 +684,10 @@ impl SpoolProbe {
             .cloned()
     }
 
+    pub fn runtime_seed_allocations(&self) -> u64 {
+        self.inner.lock().unwrap().runtime_seed_sequence
+    }
+
     pub fn enqueued_batches(&self) -> Vec<IngestBatch> {
         self.inner.lock().unwrap().enqueued_batches.clone()
     }

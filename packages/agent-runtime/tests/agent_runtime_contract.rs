@@ -766,8 +766,13 @@ async fn control_completion_persist_failure_keeps_replay_path() {
     let center = CenterProbe::accepting();
     let spool = SpoolProbe::fail_next_control_completion();
     let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
-    let mut service =
-        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center,
+        spool.clone(),
+        runner.clone(),
+    )
+    .unwrap();
 
     let first_error = service
         .handle_control_message(ControlMessage::build_content(
@@ -795,6 +800,10 @@ async fn control_completion_persist_failure_keeps_replay_path() {
     assert_eq!(
         replay,
         ControlReply::accepted("control-build-completion-failure", "build_content")
+    );
+    assert_eq!(
+        spool.control_message_record("control-build-completion-failure"),
+        Some(ControlMessageRecord::Completed(Ok(replay)))
     );
     assert_eq!(runner.requests().len(), 1);
 }
@@ -996,11 +1005,12 @@ fn startup_rejects_zero_schedule_interval_seconds() {
 fn startup_invalid_frame_settings_are_config_errors() {
     let mut config = script_lane_agent_config();
     config.lanes[0].config.raw_stage.settings["frame"]["maxSeconds"] = json!(0);
+    let spool = SpoolProbe::default();
 
     let error = match AgentService::new(
         config,
         CenterProbe::accepting(),
-        SpoolProbe::default(),
+        spool.clone(),
         ScriptRunnerProbe::with_outputs(Vec::new()),
     ) {
         Ok(_) => panic!("expected config error"),
@@ -1013,6 +1023,7 @@ fn startup_invalid_frame_settings_are_config_errors() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(spool.runtime_seed_allocations(), 0);
 }
 
 #[test]
