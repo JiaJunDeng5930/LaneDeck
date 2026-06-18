@@ -33,32 +33,33 @@ export class R2ContentStore {
   ): Promise<ContentBuildObjectKeys> {
     const revision = normalizeObjectPath(write.revision, "contentRevision");
     const entrypoint = normalizeObjectPath(write.entrypoint, "entrypoint");
-    const assetKeys: string[] = [];
-    let entrypointKey: string | null = null;
+    const artifacts = write.artifacts.map((artifact, index) => ({
+      path: normalizeObjectPath(artifact.path, `artifacts.${index}.path`),
+      body: artifact.body,
+      contentType: artifact.contentType,
+    }));
 
-    for (const [index, artifact] of write.artifacts.entries()) {
-      const path = normalizeObjectPath(
-        artifact.path,
-        `artifacts.${index}.path`,
-      );
-      const key = ["content", revision, path].join("/");
-      await this.bucket.put(key, artifact.body, {
-        httpMetadata: {
-          contentType: artifact.contentType ?? contentTypeFor(path),
-        },
-      });
-      assetKeys.push(key);
-      if (path === entrypoint) {
-        entrypointKey = key;
-      }
-    }
-
-    if (entrypointKey === null) {
+    if (!artifacts.some((artifact) => artifact.path === entrypoint)) {
       throw badRequest(
         "invalid_content_build_payload",
         "entrypoint",
         "expected entrypoint artifact",
       );
+    }
+
+    const assetKeys: string[] = [];
+    let entrypointKey = "";
+    for (const artifact of artifacts) {
+      const key = ["content", revision, artifact.path].join("/");
+      await this.bucket.put(key, artifact.body, {
+        httpMetadata: {
+          contentType: artifact.contentType ?? contentTypeFor(artifact.path),
+        },
+      });
+      assetKeys.push(key);
+      if (artifact.path === entrypoint) {
+        entrypointKey = key;
+      }
     }
 
     return { entrypointKey, assetKeys };

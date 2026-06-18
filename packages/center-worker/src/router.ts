@@ -20,7 +20,7 @@ import {
   validateQueryRequestName,
 } from "./workspace";
 
-import type { CenterWorkerEnv } from "./runtime-types";
+import type { CenterWorkerEnv, WorkspaceRpcResult } from "./runtime-types";
 
 export async function handleRequest(
   request: Request,
@@ -77,7 +77,9 @@ async function routeRequest(
       await readJson(request),
     );
     return jsonResponse(
-      await workspace(env, completion.workspaceId).buildComplete(completion),
+      unwrapWorkspaceRpcResult(
+        await workspace(env, completion.workspaceId).buildComplete(completion),
+      ),
     );
   }
 
@@ -203,6 +205,18 @@ function decodeContentPathSegment(segment: string): string {
 
 function workspace(env: CenterWorkerEnv, workspaceId: string) {
   return env.WORKSPACE_COORDINATOR.getByName(workspaceId);
+}
+
+function unwrapWorkspaceRpcResult<T>(result: WorkspaceRpcResult<T>): T {
+  if (result.ok) {
+    return result.value;
+  }
+
+  throw new ApiError(
+    result.error.status,
+    result.error.code,
+    result.error.diagnostics,
+  );
 }
 
 async function requireBearerToken(

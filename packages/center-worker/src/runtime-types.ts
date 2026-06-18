@@ -1,5 +1,6 @@
 import type {
   ContentBuildCompleteRequest,
+  Diagnostic,
   IngestAck,
   IngestBatch,
   MutationRequest,
@@ -8,11 +9,27 @@ import type {
   QueryResponse,
 } from "@lanedeck/protocol";
 
+export type WorkspaceRpcResult<T> =
+  | {
+      ok: true;
+      value: T;
+    }
+  | {
+      ok: false;
+      error: {
+        status: number;
+        code: string;
+        diagnostics: Diagnostic[];
+      };
+    };
+
 export interface WorkspaceCoordinatorRpc {
   ingest(batch: IngestBatch): Promise<IngestAck>;
   query(request: QueryRequest): Promise<QueryResponse>;
   mutate(request: MutationRequest): Promise<MutationResult>;
-  buildComplete(request: ContentBuildCompleteRequest): Promise<MutationResult>;
+  buildComplete(
+    request: ContentBuildCompleteRequest,
+  ): Promise<WorkspaceRpcResult<MutationResult>>;
   connectAgent(request: Request): Promise<Response>;
   connectBrowser(request: Request): Promise<Response>;
   fetch(request: Request): Promise<Response>;

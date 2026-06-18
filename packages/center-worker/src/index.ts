@@ -15,6 +15,7 @@ import { handleRequest } from "./router";
 import { D1CenterStorage } from "./storage/d1";
 import { R2ContentStore } from "./storage/r2";
 import { WorkspaceService } from "./workspace";
+import type { WorkspaceRpcResult } from "./runtime-types";
 
 export class WorkspaceCoordinator extends DurableObject<Env> {
   private readonly live = new LiveHub();
@@ -51,8 +52,8 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
   async buildComplete(
     request: ContentBuildCompleteRequest,
-  ): Promise<MutationResult> {
-    return await this.service.buildComplete(request);
+  ): Promise<WorkspaceRpcResult<MutationResult>> {
+    return await rpcResult(() => this.service.buildComplete(request));
   }
 
   async connectAgent(request: Request): Promise<Response> {
@@ -156,3 +157,24 @@ export default {
     return await handleRequest(request, env);
   },
 } satisfies ExportedHandler<Env>;
+
+async function rpcResult<T>(
+  operation: () => Promise<T>,
+): Promise<WorkspaceRpcResult<T>> {
+  try {
+    return { ok: true, value: await operation() };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return {
+        ok: false,
+        error: {
+          status: error.status,
+          code: error.code,
+          diagnostics: error.diagnostics,
+        },
+      };
+    }
+
+    throw error;
+  }
+}
