@@ -40,6 +40,13 @@ E2E tests compose the packages at runtime and introduce no package dependency.
 - HTTP query APIs read data. AI mutation APIs write content, lane settings, and mutable data files.
 - Cloudflare core state uses Workers, Durable Objects, D1, and R2.
 
+## Review And Contract Rules
+
+- Cross-cutting contracts live in `design/02-cross-cutting-contracts.md`.
+- If one branch exceeds three review rounds, classify review findings against cross-cutting contracts before further implementation.
+- Missing or ambiguous contracts are fixed in design first, then in tests and implementation.
+- Package tests and package implementation are separate tasks and should be delegated to different subagents.
+
 ## Commands
 
 - Use `corepack pnpm` for workspace commands on this machine.
