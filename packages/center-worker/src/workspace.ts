@@ -412,11 +412,11 @@ function readPatchLaneConfigPayload(
 
 function readLocalBuildPayload(payload: JsonObject): LocalBuildPayload {
   return {
-    machineId: requiredString(payload, "machineId"),
-    contentId: requiredString(payload, "contentId"),
-    contentRevision: requiredString(payload, "contentRevision"),
-    cwd: requiredString(payload, "cwd"),
-    command: requiredString(payload, "command"),
+    machineId: requiredNonEmptyString(payload, "machineId"),
+    contentId: requiredNonEmptyString(payload, "contentId"),
+    contentRevision: requiredNonEmptyString(payload, "contentRevision"),
+    cwd: requiredNonEmptyString(payload, "cwd"),
+    command: requiredNonEmptyString(payload, "command"),
   };
 }
 
@@ -499,6 +499,19 @@ function requiredString(payload: JsonObject, key: string): string {
     "invalid_mutation_payload",
     `payload.${key}`,
     "expected string",
+  );
+}
+
+function requiredNonEmptyString(payload: JsonObject, key: string): string {
+  const value = requiredString(payload, key);
+  if (value.trim().length > 0) {
+    return value;
+  }
+
+  throw badRequest(
+    "invalid_mutation_payload",
+    `payload.${key}`,
+    "expected non-empty string",
   );
 }
 

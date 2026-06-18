@@ -76,6 +76,7 @@ async function routeRequest(
     const completion = parseContentBuildCompleteRequest(
       await readJson(request),
     );
+    validateContentBuildCompleteRequest(completion);
     return jsonResponse(
       unwrapWorkspaceRpcResult(
         await workspace(env, completion.workspaceId).buildComplete(completion),
@@ -216,6 +217,29 @@ function unwrapWorkspaceRpcResult<T>(result: WorkspaceRpcResult<T>): T {
     result.error.status,
     result.error.code,
     result.error.diagnostics,
+  );
+}
+
+function validateContentBuildCompleteRequest(
+  completion: ReturnType<typeof parseContentBuildCompleteRequest>,
+): void {
+  requireNonEmptyContentBuildField(completion.machineId, "machineId");
+  requireNonEmptyContentBuildField(completion.buildRequestId, "buildRequestId");
+  requireNonEmptyContentBuildField(
+    completion.contentRevision,
+    "contentRevision",
+  );
+}
+
+function requireNonEmptyContentBuildField(value: string, path: string): void {
+  if (value.trim().length > 0) {
+    return;
+  }
+
+  throw badRequest(
+    "invalid_content_build_completion",
+    path,
+    "expected non-empty string",
   );
 }
 

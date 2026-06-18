@@ -362,10 +362,17 @@ where
                 message_id,
                 machine_id,
                 content_id,
-                content_revision: _content_revision,
+                content_revision,
                 cwd,
                 command,
             } => {
+                validate_build_content_control(
+                    &machine_id,
+                    &content_id,
+                    &content_revision,
+                    &cwd,
+                    &command,
+                )?;
                 if machine_id != self.machine_id {
                     return Err(AgentError::config(format!(
                         "build_content machineId {machine_id} does not match local machineId {}",
@@ -1055,6 +1062,34 @@ fn path_parent_or_dot(path: &Path) -> PathBuf {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     }
+}
+
+fn validate_build_content_control(
+    machine_id: &str,
+    content_id: &str,
+    content_revision: &str,
+    cwd: &Path,
+    command: &str,
+) -> Result<(), AgentError> {
+    require_non_empty_control_field("machineId", machine_id)?;
+    require_non_empty_control_field("contentId", content_id)?;
+    require_non_empty_control_field("contentRevision", content_revision)?;
+    if cwd.as_os_str().is_empty() {
+        return Err(AgentError::config(
+            "build_content cwd must be non-empty".to_string(),
+        ));
+    }
+    require_non_empty_control_field("command", command)
+}
+
+fn require_non_empty_control_field(field: &str, value: &str) -> Result<(), AgentError> {
+    if !value.trim().is_empty() {
+        return Ok(());
+    }
+
+    Err(AgentError::config(format!(
+        "build_content {field} must be non-empty"
+    )))
 }
 
 fn bool_setting(
