@@ -463,6 +463,71 @@ async fn pending_close_retry_uses_close_time_lane_config_after_reload() {
 }
 
 #[tokio::test]
+async fn pending_close_retry_defers_history_limit_reload_until_close_finishes() {
+    let first = instant(1_700_013_750);
+    let second = instant(1_700_013_751);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_results(vec![
+        Ok(script_output_with_record("raw:first", first)),
+        Err("metric failed first".to_string()),
+        Ok(script_output_with_record("metric:first", second)),
+        Ok(script_output_with_record("event:first", second)),
+        Ok(script_output_with_record("raw:second", second)),
+        Ok(script_output_with_record("metric:second", second)),
+        Ok(script_output_with_record("event:second", second)),
+    ]);
+    let mut config = scripted_metric_agent_config();
+    config.lanes[0].schedule.interval_seconds = 1;
+    config.lanes[0].config.event_stage.mode = StageMode::Script;
+    config.lanes[0].config.event_stage.settings = json!({
+        "command": "event-cpu",
+        "cwd": "/var/lib/lanedeck/stages/event",
+        "timeoutSeconds": 7,
+        "captureStdout": true,
+        "captureStderr": true,
+        "history": {
+            "metricFrames": 1
+        }
+    });
+    let mut service = AgentService::new(config, center, spool, runner.clone()).unwrap();
+
+    service.run_once(first).await.unwrap();
+    let mut reloaded = reloaded_scripted_metric_lane_config();
+    reloaded.event_stage.mode = StageMode::Script;
+    reloaded.event_stage.settings = json!({
+        "command": "event-cpu-reloaded",
+        "cwd": "/var/lib/lanedeck/stages/event-reloaded",
+        "timeoutSeconds": 7,
+        "captureStdout": true,
+        "captureStderr": true,
+        "history": {
+            "metricFrames": 0
+        }
+    });
+    service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            "control-reload-pending-history",
+            reloaded,
+        ))
+        .await
+        .unwrap();
+    service.run_once(second).await.unwrap();
+
+    let event_inputs = event_stage_inputs(&runner);
+
+    assert_eq!(event_inputs.len(), 2);
+    assert_eq!(
+        event_inputs[0]["history"]["metricFrames"][0]["records"][0]["id"],
+        "metric:first"
+    );
+    assert_eq!(
+        event_inputs[1]["lane"]["eventStage"]["settings"]["history"]["metricFrames"],
+        0
+    );
+}
+
+#[tokio::test]
 async fn reload_lane_config_rejects_unknown_lane_and_keeps_existing_schedule() {
     let now = instant(1_700_013_800);
     let center = CenterProbe::accepting();
@@ -1689,6 +1754,16 @@ fn metric_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
         .into_iter()
         .filter(|request| request.purpose == ScriptPurpose::TransformStage)
         .map(|request| request.input.unwrap())
+        .collect()
+}
+
+fn event_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
+    runner
+        .requests()
+        .into_iter()
+        .filter(|request| request.purpose == ScriptPurpose::TransformStage)
+        .filter_map(|request| request.input)
+        .filter(|input| input["currentFrame"]["stage"] == "metric")
         .collect()
 }
 
