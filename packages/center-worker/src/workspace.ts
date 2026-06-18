@@ -313,7 +313,7 @@ function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
   };
 }
 
-function validateIngestIdentity(batch: IngestBatch): void {
+export function validateIngestIdentity(batch: IngestBatch): void {
   const diagnostics: Diagnostic[] = [];
   const frameIdentities = new Set<string>();
 

@@ -14,6 +14,7 @@ import {
 } from "./errors";
 import { R2ContentStore } from "./storage/r2";
 import {
+  validateIngestIdentity,
   validateMutationRequestPayload,
   validateQueryRequestName,
 } from "./workspace";
@@ -46,6 +47,7 @@ async function routeRequest(
   if (request.method === "POST" && url.pathname === "/api/ingest") {
     await requireBearerToken(request, env.LANEDECK_AGENT_TOKEN);
     const batch = parseIngestBatch(await readJson(request));
+    validateIngestIdentity(batch);
     return jsonResponse(await workspace(env, batch.workspaceId).ingest(batch));
   }
 
