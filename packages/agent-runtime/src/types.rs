@@ -354,6 +354,7 @@ pub mod duration_seconds {
         D: Deserializer<'de>,
     {
         let seconds = i64::deserialize(deserializer)?;
-        Ok(Duration::seconds(seconds))
+        Duration::try_seconds(seconds)
+            .ok_or_else(|| de::Error::custom("timeoutSeconds is outside supported duration range"))
     }
 }

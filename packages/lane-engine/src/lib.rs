@@ -63,7 +63,7 @@ pub struct LaneEngine<S, R> {
     pending_raw_close: Option<PendingRawClose>,
     next_frame_no: u64,
     max_records: usize,
-    max_seconds: i64,
+    max_duration: Duration,
     effects: Vec<EngineEffect>,
 }
 
@@ -115,7 +115,7 @@ where
         runner: R,
         next_frame_no: u64,
     ) -> Result<Self, EngineError> {
-        let (max_records, max_seconds) = frame_limits(&config)?;
+        let (max_records, max_duration) = frame_limits(&config)?;
 
         Ok(Self {
             config,
@@ -126,17 +126,17 @@ where
             pending_raw_close: None,
             next_frame_no,
             max_records,
-            max_seconds,
+            max_duration,
             effects: Vec::new(),
         })
     }
 
     pub fn replace_config(&mut self, config: LaneConfig) -> Result<(), EngineError> {
-        let (max_records, max_seconds) = frame_limits(&config)?;
+        let (max_records, max_duration) = frame_limits(&config)?;
 
         self.config = config;
         self.max_records = max_records;
-        self.max_seconds = max_seconds;
+        self.max_duration = max_duration;
 
         Ok(())
     }
@@ -151,7 +151,7 @@ where
     }
 }
 
-fn frame_limits(config: &LaneConfig) -> Result<(usize, i64), EngineError> {
+fn frame_limits(config: &LaneConfig) -> Result<(usize, Duration), EngineError> {
     let max_records = config.raw_stage.settings["frame"]["maxRecords"]
         .as_u64()
         .ok_or_else(|| EngineError::InvalidConfig("rawStage.settings.frame.maxRecords".into()))?
@@ -169,8 +169,13 @@ fn frame_limits(config: &LaneConfig) -> Result<(usize, i64), EngineError> {
             "rawStage.settings.frame.maxSeconds must be positive".into(),
         ));
     }
+    let max_duration = Duration::try_seconds(max_seconds).ok_or_else(|| {
+        EngineError::InvalidConfig(
+            "rawStage.settings.frame.maxSeconds is outside supported duration range".into(),
+        )
+    })?;
 
-    Ok((max_records, max_seconds))
+    Ok((max_records, max_duration))
 }
 
 impl<S, R> LaneEngine<S, R>
@@ -220,7 +225,7 @@ where
             return Ok(self.drain_effects());
         }
 
-        if now.signed_duration_since(opened_at) >= Duration::seconds(self.max_seconds) {
+        if now.signed_duration_since(opened_at) >= self.max_duration {
             self.request_raw_close(TriggerKind::Time, now)?;
         }
 

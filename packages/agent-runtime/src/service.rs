@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -241,12 +241,12 @@ where
                     report.diagnostics.extend(diagnostics);
                 }
                 Ok(ack) => {
-                    self.spool.mark_rejected(
-                        std::slice::from_ref(&id),
-                        ack_rejection_diagnostics(&ack, &entry.batch),
-                    )?;
+                    let diagnostics = ack_rejection_diagnostics(&ack, &entry.batch);
+                    self.spool
+                        .mark_rejected(std::slice::from_ref(&id), diagnostics.clone())?;
                     report.uploaded_batch_count += 1;
                     report.rejected_entry_count += 1;
+                    report.diagnostics.extend(diagnostics);
                 }
                 Err(error) => {
                     let reason = RetryReason::network(error.to_string());
@@ -279,7 +279,7 @@ where
                     command,
                     cwd: cwd.into(),
                     input: None,
-                    timeout: Duration::seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
+                    timeout: fixed_duration_seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
                     capture_stderr: true,
                     side_effect_policy: ScriptSideEffectPolicy::ContentBuildBoundary,
@@ -288,10 +288,7 @@ where
                 Ok(ControlReply::accepted("build_content"))
             }
             ControlMessage::ApplyLocalChange { path, body } => {
-                let cwd = path
-                    .parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("."));
+                let cwd = path_parent_or_dot(&path);
                 let command = serde_json::to_string(&serde_json::json!({
                     "type": "apply_local_change",
                     "path": path,
@@ -304,7 +301,7 @@ where
                     command,
                     cwd: cwd.into(),
                     input: None,
-                    timeout: Duration::seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
+                    timeout: fixed_duration_seconds(BUILD_CONTENT_TIMEOUT_SECONDS),
                     capture_stdout: true,
                     capture_stderr: true,
                     side_effect_policy: ScriptSideEffectPolicy::LocalContentWriteBoundary,
@@ -644,7 +641,10 @@ fn lane_schedule_interval(lane_id: &str, interval_seconds: u64) -> Result<Durati
         ))
     })?;
 
-    Ok(Duration::seconds(seconds))
+    checked_duration_seconds(
+        seconds,
+        format!("lane {lane_id} schedule.intervalSeconds is outside supported duration range"),
+    )
 }
 
 fn validate_script_settings(
@@ -670,7 +670,7 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
         command: string_setting(settings, "command", &lane.lane_id, "rawStage")?,
         cwd: path_setting(settings, "cwd", &lane.lane_id, "rawStage")?.into(),
         input: None,
-        timeout: Duration::seconds(timeout_setting(settings, &lane.lane_id, "rawStage")?),
+        timeout: timeout_setting(settings, &lane.lane_id, "rawStage")?,
         capture_stdout: bool_setting(settings, "captureStdout", true, &lane.lane_id, "rawStage")?,
         capture_stderr: bool_setting(settings, "captureStderr", true, &lane.lane_id, "rawStage")?,
         side_effect_policy: ScriptSideEffectPolicy::LaneSourceReadBoundary,
@@ -800,10 +800,8 @@ fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequ
             serde_json::to_value(invocation)
                 .map_err(|error| EngineError::Runner(error.to_string()))?,
         ),
-        timeout: Duration::seconds(
-            timeout_setting(settings, lane_id, stage_path)
-                .map_err(|error| EngineError::Runner(error.to_string()))?,
-        ),
+        timeout: timeout_setting(settings, lane_id, stage_path)
+            .map_err(|error| EngineError::Runner(error.to_string()))?,
         capture_stdout: bool_setting(settings, "captureStdout", true, lane_id, stage_path)
             .map_err(|error| EngineError::Runner(error.to_string()))?,
         capture_stderr: bool_setting(settings, "captureStderr", true, lane_id, stage_path)
@@ -840,7 +838,11 @@ fn path_setting(
     )?))
 }
 
-fn timeout_setting(settings: &Value, lane_id: &str, stage_path: &str) -> Result<i64, AgentError> {
+fn timeout_setting(
+    settings: &Value,
+    lane_id: &str,
+    stage_path: &str,
+) -> Result<Duration, AgentError> {
     let seconds = settings
         .get("timeoutSeconds")
         .and_then(Value::as_i64)
@@ -856,7 +858,30 @@ fn timeout_setting(settings: &Value, lane_id: &str, stage_path: &str) -> Result<
         )));
     }
 
-    Ok(seconds)
+    checked_duration_seconds(
+        seconds,
+        format!(
+            "lane {lane_id} {stage_path}.settings.timeoutSeconds is outside supported duration range"
+        ),
+    )
+}
+
+fn checked_duration_seconds(
+    seconds: i64,
+    message: impl Into<String>,
+) -> Result<Duration, AgentError> {
+    Duration::try_seconds(seconds).ok_or_else(|| AgentError::config(message.into()))
+}
+
+fn fixed_duration_seconds(seconds: i64) -> Duration {
+    Duration::try_seconds(seconds).expect("fixed agent runtime duration fits chrono")
+}
+
+fn path_parent_or_dot(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 fn bool_setting(
