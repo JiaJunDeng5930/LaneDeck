@@ -7,6 +7,7 @@ import type {
 export interface ContentRevisionRecord {
   workspaceId: string;
   mutationId: string;
+  mutationSequence: number;
   revision: string;
   sourcePath: string;
   contentPath: string;
@@ -19,6 +20,7 @@ export interface ContentRevisionRecord {
 export interface LaneRevisionRecord {
   workspaceId: string;
   mutationId: string;
+  mutationSequence: number;
   laneId: string;
   revision: string;
   settings: JsonObject;
@@ -46,8 +48,8 @@ export interface CenterStorage {
   initialize(): Promise<void>;
   saveIngestBatch(batch: IngestBatch, ingestedAt: string): Promise<void>;
   getCurrentState(workspaceId: string): Promise<JsonObject>;
-  saveContentRevision(record: ContentRevisionRecord): Promise<void>;
+  saveContentRevision(record: ContentRevisionRecord): Promise<boolean>;
   getCurrentContent(workspaceId: string): Promise<ContentRevisionRecord | null>;
-  saveLaneRevision(record: LaneRevisionRecord): Promise<void>;
-  saveMutation(request: MutationRequest, mutationId: string): Promise<void>;
+  saveLaneRevision(record: LaneRevisionRecord): Promise<boolean>;
+  saveMutation(request: MutationRequest, mutationId: string): Promise<number>;
 }

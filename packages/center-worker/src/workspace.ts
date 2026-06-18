@@ -99,14 +99,30 @@ export class WorkspaceService {
 
     if (request.mutation === "patch_content") {
       const payload = readPatchContentPayload(request.payload);
-      await this.options.storage.saveMutation(request, mutationId);
-      return await this.patchContent(request, mutationId, payload);
+      const mutationSequence = await this.options.storage.saveMutation(
+        request,
+        mutationId,
+      );
+      return await this.patchContent(
+        request,
+        mutationId,
+        mutationSequence,
+        payload,
+      );
     }
 
     if (request.mutation === "patch_lane_config") {
       const payload = readPatchLaneConfigPayload(request.payload);
-      await this.options.storage.saveMutation(request, mutationId);
-      return await this.patchLaneConfig(request, mutationId, payload);
+      const mutationSequence = await this.options.storage.saveMutation(
+        request,
+        mutationId,
+      );
+      return await this.patchLaneConfig(
+        request,
+        mutationId,
+        mutationSequence,
+        payload,
+      );
     }
 
     const payload = readLocalBuildPayload(request.payload);
@@ -126,6 +142,7 @@ export class WorkspaceService {
   private async patchContent(
     request: MutationRequest,
     mutationId: string,
+    mutationSequence: number,
     payload: PatchContentPayload,
   ): Promise<MutationResult> {
     const contentRevision = this.idGenerator();
@@ -138,9 +155,10 @@ export class WorkspaceService {
       source: payload.source,
     });
 
-    await this.options.storage.saveContentRevision({
+    const isCurrent = await this.options.storage.saveContentRevision({
       workspaceId: request.workspaceId,
       mutationId,
+      mutationSequence,
       revision: contentRevision,
       sourcePath: payload.sourcePath,
       contentPath: payload.contentPath,
@@ -150,35 +168,48 @@ export class WorkspaceService {
       metadata: payload.metadata,
     });
 
-    this.options.live.broadcastToBrowsers({
-      type: "content_changed",
-      workspaceId: request.workspaceId,
-      mutationId,
-      contentRevision,
-    });
+    if (isCurrent) {
+      this.options.live.broadcastToBrowsers({
+        type: "content_changed",
+        workspaceId: request.workspaceId,
+        mutationId,
+        contentRevision,
+      });
+    }
 
     return {
       mutation: "patch_content",
       mutationId,
       contentRevision,
-      diagnostics: [],
+      diagnostics: supersededDiagnostics(isCurrent, "currentContent"),
     };
   }
 
   private async patchLaneConfig(
     request: MutationRequest,
     mutationId: string,
+    mutationSequence: number,
     payload: PatchLaneConfigPayload,
   ): Promise<MutationResult> {
     const laneRevision = this.idGenerator();
-    await this.options.storage.saveLaneRevision({
+    const isCurrent = await this.options.storage.saveLaneRevision({
       workspaceId: request.workspaceId,
       mutationId,
+      mutationSequence,
       laneId: payload.config.laneId,
       revision: laneRevision,
       settings: jsonObjectFromLaneConfig(payload.config),
       createdAt: this.clock(),
     });
+    if (!isCurrent) {
+      return {
+        mutation: "patch_lane_config",
+        mutationId,
+        laneRevision,
+        diagnostics: supersededDiagnostics(isCurrent, "currentLane"),
+      };
+    }
+
     this.options.live.broadcastToBrowsers({
       type: "lane_settings_changed",
       workspaceId: request.workspaceId,
@@ -291,6 +322,19 @@ function deliveryDiagnostics(
     {
       path: "agents",
       message: `no connected agent accepted ${messageType}`,
+    },
+  ];
+}
+
+function supersededDiagnostics(isCurrent: boolean, path: string): Diagnostic[] {
+  if (isCurrent) {
+    return [];
+  }
+
+  return [
+    {
+      path,
+      message: "superseded by newer mutation sequence",
     },
   ];
 }

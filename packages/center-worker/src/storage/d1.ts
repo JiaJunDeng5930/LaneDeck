@@ -29,6 +29,7 @@ interface FrameRow {
 interface ContentRevisionRow {
   workspace_id: string;
   mutation_id: string;
+  mutation_sequence: number;
   revision: string;
   source_path: string;
   content_path: string;
@@ -42,10 +43,10 @@ const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS ingest_batches (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, frame_count INTEGER NOT NULL, ingested_at TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id))",
   "CREATE TABLE IF NOT EXISTS frames (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL, trigger_kind TEXT NOT NULL, record_count INTEGER NOT NULL, summary_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no))",
   "CREATE TABLE IF NOT EXISTS frame_records (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, record_id TEXT NOT NULL, observed_at TEXT NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no, record_id))",
-  "CREATE TABLE IF NOT EXISTS mutation_log (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, mutation_id))",
-  "CREATE TABLE IF NOT EXISTS content_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, revision TEXT NOT NULL, source_path TEXT NOT NULL, content_path TEXT NOT NULL, source_key TEXT NOT NULL, asset_key TEXT NOT NULL, created_at TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY (workspace_id, revision))",
-  "CREATE TABLE IF NOT EXISTS lane_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, lane_id TEXT NOT NULL, revision TEXT NOT NULL, settings_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, lane_id, revision))",
-  "CREATE TABLE IF NOT EXISTS workspace_pointers (workspace_id TEXT NOT NULL, pointer_key TEXT NOT NULL, pointer_value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (workspace_id, pointer_key))",
+  "CREATE TABLE IF NOT EXISTS mutation_log (mutation_sequence INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (workspace_id, mutation_id))",
+  "CREATE TABLE IF NOT EXISTS content_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, revision TEXT NOT NULL, source_path TEXT NOT NULL, content_path TEXT NOT NULL, source_key TEXT NOT NULL, asset_key TEXT NOT NULL, created_at TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY (workspace_id, revision))",
+  "CREATE TABLE IF NOT EXISTS lane_revisions (workspace_id TEXT NOT NULL, mutation_id TEXT NOT NULL, mutation_sequence INTEGER NOT NULL, lane_id TEXT NOT NULL, revision TEXT NOT NULL, settings_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (workspace_id, lane_id, revision))",
+  "CREATE TABLE IF NOT EXISTS workspace_pointers (workspace_id TEXT NOT NULL, pointer_key TEXT NOT NULL, pointer_value TEXT NOT NULL, pointer_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (workspace_id, pointer_key))",
 ];
 
 export class D1CenterStorage implements CenterStorage {
@@ -131,13 +132,14 @@ export class D1CenterStorage implements CenterStorage {
     };
   }
 
-  async saveContentRevision(record: ContentRevisionRecord): Promise<void> {
+  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
     await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO content_revisions (
             workspace_id,
             mutation_id,
+            mutation_sequence,
             revision,
             source_path,
             content_path,
@@ -145,11 +147,12 @@ export class D1CenterStorage implements CenterStorage {
             asset_key,
             created_at,
             metadata_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           record.workspaceId,
           record.mutationId,
+          record.mutationSequence,
           record.revision,
           record.sourcePath,
           record.contentPath,
@@ -162,9 +165,15 @@ export class D1CenterStorage implements CenterStorage {
         record.workspaceId,
         "current_content_revision",
         record.revision,
+        record.mutationSequence,
         record.createdAt,
       ),
     ]);
+    return await this.pointerMatches(
+      record.workspaceId,
+      "current_content_revision",
+      record.revision,
+    );
   }
 
   async getCurrentContent(
@@ -188,6 +197,7 @@ export class D1CenterStorage implements CenterStorage {
         `SELECT
           workspace_id,
           mutation_id,
+          mutation_sequence,
           revision,
           source_path,
           content_path,
@@ -204,22 +214,24 @@ export class D1CenterStorage implements CenterStorage {
     return row === null ? null : contentRevisionFromRow(row);
   }
 
-  async saveLaneRevision(record: LaneRevisionRecord): Promise<void> {
+  async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {
     await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO lane_revisions (
             workspace_id,
             mutation_id,
+            mutation_sequence,
             lane_id,
             revision,
             settings_json,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           record.workspaceId,
           record.mutationId,
+          record.mutationSequence,
           record.laneId,
           record.revision,
           JSON.stringify(record.settings),
@@ -229,16 +241,22 @@ export class D1CenterStorage implements CenterStorage {
         record.workspaceId,
         `lane_revision:${record.laneId}`,
         record.revision,
+        record.mutationSequence,
         record.createdAt,
       ),
     ]);
+    return await this.pointerMatches(
+      record.workspaceId,
+      `lane_revision:${record.laneId}`,
+      record.revision,
+    );
   }
 
   async saveMutation(
     request: MutationRequest,
     mutationId: string,
-  ): Promise<void> {
-    await this.db
+  ): Promise<number> {
+    const row = await this.db
       .prepare(
         `INSERT INTO mutation_log (
           workspace_id,
@@ -246,7 +264,8 @@ export class D1CenterStorage implements CenterStorage {
           mutation,
           payload_json,
           created_at
-        ) VALUES (?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?)
+        RETURNING mutation_sequence`,
       )
       .bind(
         request.workspaceId,
@@ -255,7 +274,13 @@ export class D1CenterStorage implements CenterStorage {
         JSON.stringify(request.payload),
         new Date().toISOString(),
       )
-      .run();
+      .first<{ mutation_sequence: number }>();
+
+    if (row === null) {
+      throw new Error("mutation log insert did not return a sequence");
+    }
+
+    return row.mutation_sequence;
   }
 
   private insertFrame(batch: IngestBatch, frame: Frame): D1PreparedStatement {
@@ -326,6 +351,7 @@ export class D1CenterStorage implements CenterStorage {
     workspaceId: string,
     key: string,
     value: string,
+    mutationSequence: number,
     updatedAt: string,
   ): D1PreparedStatement {
     return this.db
@@ -334,14 +360,33 @@ export class D1CenterStorage implements CenterStorage {
           workspace_id,
           pointer_key,
           pointer_value,
+          pointer_sequence,
           updated_at
-        ) VALUES (?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(workspace_id, pointer_key)
         DO UPDATE SET
           pointer_value = excluded.pointer_value,
-          updated_at = excluded.updated_at`,
+          pointer_sequence = excluded.pointer_sequence,
+          updated_at = excluded.updated_at
+        WHERE workspace_pointers.pointer_sequence <= excluded.pointer_sequence`,
       )
-      .bind(workspaceId, key, value, updatedAt);
+      .bind(workspaceId, key, value, mutationSequence, updatedAt);
+  }
+
+  private async pointerMatches(
+    workspaceId: string,
+    key: string,
+    value: string,
+  ): Promise<boolean> {
+    const current = await this.db
+      .prepare(
+        `SELECT pointer_value
+        FROM workspace_pointers
+        WHERE workspace_id = ? AND pointer_key = ?`,
+      )
+      .bind(workspaceId, key)
+      .first<string>("pointer_value");
+    return current === value;
   }
 }
 
@@ -351,6 +396,7 @@ function contentRevisionFromRow(
   return {
     workspaceId: row.workspace_id,
     mutationId: row.mutation_id,
+    mutationSequence: row.mutation_sequence,
     revision: row.revision,
     sourcePath: row.source_path,
     contentPath: row.content_path,

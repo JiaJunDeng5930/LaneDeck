@@ -792,9 +792,16 @@ class MemoryCenterStorage implements CenterStorage {
     };
   }
 
-  async saveContentRevision(record: ContentRevisionRecord): Promise<void> {
+  async saveContentRevision(record: ContentRevisionRecord): Promise<boolean> {
     this.writeCount += 1;
     this.contentRevisions.push(record);
+    return (
+      currentByMutationSequence(
+        this.contentRevisions.filter(
+          (candidate) => candidate.workspaceId === record.workspaceId,
+        ),
+      )?.revision === record.revision
+    );
   }
 
   async getCurrentContent(
@@ -806,9 +813,18 @@ class MemoryCenterStorage implements CenterStorage {
     return currentByMutationSequence(records);
   }
 
-  async saveLaneRevision(record: LaneRevisionRecord): Promise<void> {
+  async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {
     this.writeCount += 1;
     this.laneRevisions.push(record);
+    return (
+      currentByMutationSequence(
+        this.laneRevisions.filter(
+          (candidate) =>
+            candidate.workspaceId === record.workspaceId &&
+            candidate.laneId === record.laneId,
+        ),
+      )?.revision === record.revision
+    );
   }
 
   async saveMutation(request: MutationRequest): Promise<number> {

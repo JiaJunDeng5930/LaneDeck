@@ -49,7 +49,9 @@ export class R2ContentStore {
       object.httpMetadata?.contentType ?? contentTypeFor(normalizedAssetPath);
     if (
       normalizedAssetPath.endsWith(".html") ||
-      contentType.startsWith("text/html")
+      normalizedAssetPath.endsWith(".css") ||
+      contentType.startsWith("text/html") ||
+      contentType.startsWith("text/css")
     ) {
       return new Response(
         rewriteViteAssetReferences(await object.text(), normalizedRevision),
@@ -64,16 +66,17 @@ export class R2ContentStore {
 }
 
 export function rewriteViteAssetReferences(
-  html: string,
+  text: string,
   revision: string,
 ): string {
   const assetBase = `/content/${normalizeObjectPath(
     revision,
     "revision",
   )}/assets/`;
-  return html
+  return text
     .replaceAll('"/assets/', `"${assetBase}`)
-    .replaceAll("'/assets/", `'${assetBase}`);
+    .replaceAll("'/assets/", `'${assetBase}`)
+    .replace(/url\((\s*)\/assets\//g, `url($1${assetBase}`);
 }
 
 export function normalizeObjectPath(value: string, path: string): string {
