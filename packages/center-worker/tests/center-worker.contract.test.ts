@@ -15,6 +15,7 @@ import { WorkspaceService } from "../src/workspace";
 import type {
   IngestBatch,
   JsonObject,
+  LaneConfig,
   MutationRequest,
 } from "@lanedeck/protocol";
 
@@ -35,6 +36,23 @@ const validFrame = {
   ],
   summary: { event: "hello" },
 } satisfies IngestBatch["frames"][number];
+
+const validLaneConfig = {
+  laneId: "lane.local",
+  displayName: "Local lane",
+  rawStage: {
+    mode: "script",
+    settings: { command: "collect", cwd: "/workspace" },
+  },
+  metricStage: {
+    mode: "passthrough",
+    settings: {},
+  },
+  eventStage: {
+    mode: "passthrough",
+    settings: {},
+  },
+} satisfies LaneConfig;
 
 describe("center-worker contract", () => {
   it("POST /api/ingest persists structured rows and returns ack", async () => {
@@ -250,6 +268,29 @@ describe("center-worker contract", () => {
     expect(harness.storage.mutations).toHaveLength(0);
   });
 
+  it("invalid local build mutation payload returns diagnostics without mutation log writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "request_local_build",
+          payload: { reason: "content_changed" },
+        },
+        "ai-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_mutation_payload",
+      diagnostics: [expect.objectContaining({ path: "payload.contentId" })],
+    });
+    expect(harness.storage.mutations).toHaveLength(0);
+  });
+
   it("POST /api/ai/mutation rejects wrong token before payload validation", async () => {
     const harness = createHarness();
     const response = await handleRequest(
@@ -374,20 +415,156 @@ describe("center-worker contract", () => {
     const harness = createHarness();
     const agent = new RecordingSocket();
     harness.live.addAgent(agent);
+    const buildPayload = {
+      contentId: "content.home",
+      cwd: "/workspace/content",
+      command: "corepack pnpm --filter @lanedeck/content build",
+    };
 
-    await harness.workspace.mutate({
-      workspaceId: "workspace.local",
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "request_local_build",
+        payload: buildPayload,
+      }),
+    ).resolves.toEqual({
       mutation: "request_local_build",
-      payload: { reason: "content_changed" },
+      mutationId: "id-1",
+      buildRequestId: "id-2",
+      diagnostics: [],
     });
 
     expect(agent.decodedMessages()).toContainEqual({
       type: "build_content",
-      workspaceId: "workspace.local",
+      messageId: "id-2",
+      contentId: "content.home",
+      cwd: "/workspace/content",
+      command: "corepack pnpm --filter @lanedeck/content build",
+    });
+  });
+
+  it("local build mutation reports empty agent delivery", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "request_local_build",
+        payload: {
+          contentId: "content.home",
+          cwd: "/workspace/content",
+          command: "corepack pnpm --filter @lanedeck/content build",
+        },
+      }),
+    ).resolves.toEqual({
+      mutation: "request_local_build",
       mutationId: "id-1",
       buildRequestId: "id-2",
-      payload: { reason: "content_changed" },
+      diagnostics: [
+        {
+          path: "agents",
+          message: "no connected agent accepted build_content",
+        },
+      ],
     });
+  });
+
+  it("lane config mutation stores revision and asks agents to reload", async () => {
+    const harness = createHarness();
+    const agent = new RecordingSocket();
+    const browser = new RecordingSocket();
+    harness.live.addAgent(agent);
+    harness.live.addBrowser(browser);
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "patch_lane_config",
+        payload: { config: validLaneConfig },
+      }),
+    ).resolves.toEqual({
+      mutation: "patch_lane_config",
+      mutationId: "id-1",
+      laneRevision: "id-2",
+      diagnostics: [],
+    });
+
+    expect(harness.storage.laneRevisions).toEqual([
+      expect.objectContaining({
+        workspaceId: "workspace.local",
+        mutationId: "id-1",
+        laneId: "lane.local",
+        revision: "id-2",
+        settings: validLaneConfig,
+      }),
+    ]);
+    expect(browser.decodedMessages()).toContainEqual(
+      expect.objectContaining({
+        type: "lane_settings_changed",
+        workspaceId: "workspace.local",
+        mutationId: "id-1",
+        laneId: "lane.local",
+        laneRevision: "id-2",
+      }),
+    );
+    expect(agent.decodedMessages()).toContainEqual({
+      type: "reload_lane_config",
+      messageId: "id-3",
+      config: validLaneConfig,
+    });
+  });
+
+  it("lane config mutation reports empty agent delivery after saving revision", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.workspace.mutate({
+        workspaceId: "workspace.local",
+        mutation: "patch_lane_config",
+        payload: { config: validLaneConfig },
+      }),
+    ).resolves.toEqual({
+      mutation: "patch_lane_config",
+      mutationId: "id-1",
+      laneRevision: "id-2",
+      diagnostics: [
+        {
+          path: "agents",
+          message: "no connected agent accepted reload_lane_config",
+        },
+      ],
+    });
+    expect(harness.storage.laneRevisions).toHaveLength(1);
+  });
+
+  it("lane config mutation validates current lane schema before mutation log writes", async () => {
+    const harness = createHarness();
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "patch_lane_config",
+          payload: {
+            config: {
+              laneId: "lane.local",
+              rawStage: { mode: "passthrough", settings: {} },
+              metricStage: { mode: "passthrough", settings: {} },
+              eventStage: { mode: "passthrough", settings: {} },
+            },
+          },
+        },
+        "ai-token",
+      ),
+      harness.env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "protocol_validation_failed",
+      diagnostics: [expect.objectContaining({ path: "displayName" })],
+    });
+    expect(harness.storage.mutations).toHaveLength(0);
   });
 
   it("restores hibernated sockets into the live hub", () => {
@@ -404,10 +581,10 @@ describe("center-worker contract", () => {
     });
     live.sendToAgents({
       type: "build_content",
-      workspaceId: "workspace.local",
-      mutationId: "mutation-1",
-      buildRequestId: "build-1",
-      payload: {},
+      messageId: "build-1",
+      contentId: "content.home",
+      cwd: "/workspace/content",
+      command: "corepack pnpm --filter @lanedeck/content build",
     });
 
     expect(browser.decodedMessages()).toContainEqual(
