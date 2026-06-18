@@ -50,6 +50,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/query") {
+    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     const query = parseQueryRequest(await readJson(request));
     validateQueryRequestName(query);
     return jsonResponse(await workspace(env, query.workspaceId).query(query));
@@ -65,6 +66,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/content/current") {
+    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     const workspaceId = requiredWorkspaceId(url);
     return jsonResponse(
       await workspace(env, workspaceId).query({
@@ -87,6 +89,7 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
+    requireBearerToken(request, env.LANEDECK_READ_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 

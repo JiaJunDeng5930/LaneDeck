@@ -254,7 +254,7 @@ export class WorkspaceService {
     payload: LocalBuildPayload,
   ): Promise<MutationResult> {
     const buildRequestId = this.idGenerator();
-    const delivered = this.options.live.sendToAgents({
+    const delivered = this.options.live.sendToOneAgent({
       type: "build_content",
       messageId: buildRequestId,
       contentId: payload.contentId,

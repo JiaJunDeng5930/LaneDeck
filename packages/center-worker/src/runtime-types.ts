@@ -26,4 +26,5 @@ export interface CenterWorkerEnv {
   LANEDECK_BUCKET: R2Bucket;
   LANEDECK_AGENT_TOKEN?: string;
   LANEDECK_AI_MUTATION_TOKEN?: string;
+  LANEDECK_READ_TOKEN?: string;
 }

@@ -56,6 +56,16 @@ export class LiveHub {
     return this.sendTo(this.agents, message);
   }
 
+  sendToOneAgent(message: AgentControlMessage): number {
+    const encoded = JSON.stringify(message);
+    for (const socket of this.agents) {
+      if (this.sendOne(socket, encoded) === 1) {
+        return 1;
+      }
+    }
+    return 0;
+  }
+
   sendToAgent(socket: LiveSocket, message: AgentControlMessage): number {
     return this.sendOne(socket, JSON.stringify(message));
   }

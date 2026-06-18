@@ -134,11 +134,15 @@ describe("center-worker contract", () => {
     const writesBeforeQuery = harness.storage.writeCount;
 
     const response = await handleRequest(
-      jsonRequest("/api/query", {
-        workspaceId: "workspace.local",
-        query: "current_state",
-        params: {},
-      }, "read-token"),
+      jsonRequest(
+        "/api/query",
+        {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: {},
+        },
+        "read-token",
+      ),
       harness.env,
     );
 
@@ -171,11 +175,15 @@ describe("center-worker contract", () => {
     });
 
     const response = await handleRequest(
-      jsonRequest("/api/query", {
-        workspaceId: "workspace.local",
-        query: "current_state",
-        params: {},
-      }, "read-token"),
+      jsonRequest(
+        "/api/query",
+        {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: {},
+        },
+        "read-token",
+      ),
       harness.env,
     );
 
@@ -394,10 +402,13 @@ describe("center-worker contract", () => {
   it("browser WebSocket rejects missing read token before coordinator fetch", async () => {
     let fetched = false;
     const response = await handleRequest(
-      new Request("https://center.local/ws/browser?workspaceId=workspace.local", {
-        method: "GET",
-        headers: { upgrade: "websocket" },
-      }),
+      new Request(
+        "https://center.local/ws/browser?workspaceId=workspace.local",
+        {
+          method: "GET",
+          headers: { upgrade: "websocket" },
+        },
+      ),
       {
         WORKSPACE_COORDINATOR: {
           getByName: () => ({
@@ -603,7 +614,8 @@ describe("center-worker contract", () => {
     });
 
     expect(
-      firstAgent.decodedMessages().length + secondAgent.decodedMessages().length,
+      firstAgent.decodedMessages().length +
+        secondAgent.decodedMessages().length,
     ).toBe(1);
   });
 
