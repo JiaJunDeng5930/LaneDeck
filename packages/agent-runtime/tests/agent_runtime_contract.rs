@@ -1,7 +1,8 @@
 mod contract_helpers;
 
 use lanedeck_agent_runtime::{
-    AgentService, ControlMessage, ControlReply, ScriptPurpose, ScriptSideEffectPolicy, SpoolEntryId,
+    AgentError, AgentService, ControlMessage, ControlReply, ScriptPurpose, ScriptSideEffectPolicy,
+    SpoolEntryId,
 };
 use serde_json::json;
 
@@ -10,7 +11,8 @@ use contract_helpers::{
     empty_metric_agent_config, ingest_batch, instant, pending_spool_entry,
     reloaded_script_lane_config, script_lane_agent_config, script_lane_agent_config_with_interval,
     script_output_with_record, script_output_with_records, scripted_metric_agent_config,
-    successful_script_output, two_lane_agent_config, two_record_frame_agent_config,
+    scripted_metric_agent_config_with_upstream_history_limit, successful_script_output,
+    two_lane_agent_config, two_record_frame_agent_config, unknown_script_lane_config,
 };
 
 #[tokio::test]
@@ -33,6 +35,80 @@ async fn produced_lane_batch_is_enqueued_before_upload() {
     assert_eq!(report.enqueued_batch_count, 1);
     assert_eq!(spool.enqueued_batches().len(), 1);
     assert!(center.posted_batches().is_empty());
+}
+
+#[tokio::test]
+async fn spool_enqueue_failure_retains_closed_frames_for_next_run() {
+    let first = instant(1_700_010_500);
+    let second = instant(1_700_010_501);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::fail_next_enqueue();
+    let runner =
+        ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:first", first)]);
+    let mut service = AgentService::new(
+        script_lane_agent_config_with_interval(1),
+        center,
+        spool.clone(),
+        runner,
+    )
+    .unwrap();
+
+    let first_error = service.run_once(first).await.unwrap_err();
+
+    match first_error {
+        AgentError::Spool(message) => assert!(message.contains("enqueue failed")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(spool.enqueued_batches().is_empty());
+
+    let second_report = service.run_once(second).await.unwrap();
+    let enqueued = spool.enqueued_batches();
+
+    assert_eq!(second_report.enqueued_batch_count, 1);
+    assert_eq!(enqueued.len(), 1);
+    let raw_frame = enqueued[0]
+        .frames
+        .iter()
+        .find(|frame| frame.stage == lanedeck_protocol::StageKind::Raw)
+        .unwrap();
+    assert_eq!(raw_frame.records[0].id, "raw:first");
+}
+
+#[tokio::test]
+async fn batch_ids_include_restart_safe_runtime_prefix() {
+    let now = instant(1_700_010_800);
+    let first_spool = SpoolProbe::default();
+    let second_spool = SpoolProbe::default();
+    let first_runner =
+        ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:first", now)]);
+    let second_runner =
+        ScriptRunnerProbe::with_outputs(vec![script_output_with_record("raw:second", now)]);
+    let mut first_service = AgentService::new(
+        script_lane_agent_config(),
+        CenterProbe::accepting(),
+        first_spool.clone(),
+        first_runner,
+    )
+    .unwrap();
+    let mut second_service = AgentService::new(
+        script_lane_agent_config(),
+        CenterProbe::accepting(),
+        second_spool.clone(),
+        second_runner,
+    )
+    .unwrap();
+
+    first_service.run_once(now).await.unwrap();
+    second_service.run_once(now).await.unwrap();
+
+    let first_batch_id = first_spool.enqueued_batches()[0].batch_id.clone();
+    let second_batch_id = second_spool.enqueued_batches()[0].batch_id.clone();
+    let first_prefix = restart_prefix(&first_batch_id);
+    let second_prefix = restart_prefix(&second_batch_id);
+
+    assert_ne!(first_batch_id, "batch-1");
+    assert_ne!(second_batch_id, "batch-1");
+    assert_ne!(first_prefix, second_prefix);
 }
 
 #[tokio::test]
@@ -163,6 +239,39 @@ async fn reload_lane_config_preserves_existing_schedule_cadence() {
 }
 
 #[tokio::test]
+async fn reload_lane_config_rejects_unknown_lane_and_keeps_existing_schedule() {
+    let now = instant(1_700_013_800);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+    let mut service = AgentService::new(
+        script_lane_agent_config(),
+        center,
+        spool.clone(),
+        runner.clone(),
+    )
+    .unwrap();
+
+    let error = service
+        .handle_control_message(ControlMessage::reload_lane_config(
+            unknown_script_lane_config(),
+        ))
+        .await
+        .unwrap_err();
+    let report = service.run_once(now).await.unwrap();
+    let requests = runner.requests();
+
+    match error {
+        AgentError::Config(message) => assert!(message.contains("lane.unknown")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(report.lane_execution_count, 1);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].lane_id, "lane.cpu");
+    assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+}
+
+#[tokio::test]
 async fn build_content_control_message_calls_content_build_handler() {
     let now = instant(1_700_014_000);
     let center = CenterProbe::accepting();
@@ -233,6 +342,27 @@ fn malformed_apply_local_change_requires_body() {
     }));
 
     assert!(result.is_err());
+}
+
+#[test]
+fn flush_max_batch_size_zero_is_rejected_as_config_error() {
+    let mut config = script_lane_agent_config();
+    config.flush.max_batch_size = 0;
+
+    let error = match AgentService::new(
+        config,
+        CenterProbe::accepting(),
+        SpoolProbe::default(),
+        ScriptRunnerProbe::with_outputs(Vec::new()),
+    ) {
+        Ok(_) => panic!("expected config error"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error,
+        AgentError::Config("flush.maxBatchSize must be positive".to_string())
+    );
 }
 
 #[tokio::test]
@@ -325,6 +455,56 @@ async fn scripted_downstream_stage_runs_through_script_runner() {
     assert_eq!(
         requests[1].side_effect_policy,
         ScriptSideEffectPolicy::StageTransformBoundary
+    );
+}
+
+#[tokio::test]
+async fn per_lane_history_keeps_latest_configured_upstream_frame() {
+    let first = instant(1_700_016_100);
+    let second = instant(1_700_016_101);
+    let third = instant(1_700_016_102);
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner = ScriptRunnerProbe::with_outputs(vec![
+        script_output_with_record("raw:first", first),
+        script_output_with_record("metric:first", first),
+        script_output_with_record("raw:second", second),
+        script_output_with_record("metric:second", second),
+        script_output_with_record("raw:third", third),
+        script_output_with_record("metric:third", third),
+    ]);
+    let mut config = scripted_metric_agent_config_with_upstream_history_limit(1);
+    config.lanes[0].schedule.interval_seconds = 1;
+    let mut service = AgentService::new(config, center, spool, runner.clone()).unwrap();
+
+    service.run_once(first).await.unwrap();
+    service.run_once(second).await.unwrap();
+    service.run_once(third).await.unwrap();
+
+    let metric_inputs: Vec<_> = runner
+        .requests()
+        .into_iter()
+        .filter(|request| request.purpose == ScriptPurpose::TransformStage)
+        .map(|request| request.input.unwrap())
+        .collect();
+
+    assert_eq!(metric_inputs.len(), 3);
+    for input in &metric_inputs {
+        assert!(input["history"]["upstreamFrames"].as_array().unwrap().len() <= 1);
+    }
+    assert!(
+        metric_inputs[0]["history"]["upstreamFrames"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        metric_inputs[1]["history"]["upstreamFrames"][0]["records"][0]["id"],
+        "raw:first"
+    );
+    assert_eq!(
+        metric_inputs[2]["history"]["upstreamFrames"][0]["records"][0]["id"],
+        "raw:second"
     );
 }
 
@@ -499,4 +679,13 @@ async fn run_report_carries_source_and_stage_diagnostics() {
     assert_eq!(report.diagnostics.len(), 2);
     assert_eq!(report.diagnostics[0].path, "rawStage.script");
     assert_eq!(report.diagnostics[1].path, "metricStage");
+}
+
+fn restart_prefix(batch_id: &str) -> &str {
+    let (prefix, sequence) = batch_id
+        .rsplit_once(':')
+        .expect("batch id carries restart prefix and sequence");
+    assert!(prefix.contains(":runtime-"));
+    assert_eq!(sequence, "1");
+    prefix
 }

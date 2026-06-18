@@ -42,6 +42,14 @@ pub fn scripted_metric_agent_config() -> AgentConfig {
     agent_config_with_lane(lane)
 }
 
+pub fn scripted_metric_agent_config_with_upstream_history_limit(limit: u64) -> AgentConfig {
+    let mut config = scripted_metric_agent_config();
+    config.lanes[0].config.metric_stage.settings["history"] = json!({
+        "upstreamFrames": limit
+    });
+    config
+}
+
 pub fn two_record_frame_agent_config() -> AgentConfig {
     let mut lane = script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu", 5);
     lane.raw_stage.settings["frame"]["maxRecords"] = json!(2);
@@ -92,6 +100,10 @@ pub fn empty_metric_agent_config() -> AgentConfig {
 
 pub fn reloaded_script_lane_config() -> LaneConfig {
     script_lane_config("lane.cpu", "/var/lib/lanedeck/sources/cpu-reloaded", 9)
+}
+
+pub fn unknown_script_lane_config() -> LaneConfig {
+    script_lane_config("lane.unknown", "/var/lib/lanedeck/sources/unknown", 5)
 }
 
 fn agent_config_with_lane(lane: LaneConfig) -> AgentConfig {
@@ -301,6 +313,7 @@ struct SpoolProbeState {
     retry_ids: Vec<SpoolEntryId>,
     rejected_ids: Vec<SpoolEntryId>,
     rejected_diagnostics: Vec<Diagnostic>,
+    enqueue_failures_remaining: usize,
 }
 
 impl SpoolProbe {
@@ -308,6 +321,15 @@ impl SpoolProbe {
         Self {
             inner: Arc::new(Mutex::new(SpoolProbeState {
                 pending_entries: entries,
+                ..SpoolProbeState::default()
+            })),
+        }
+    }
+
+    pub fn fail_next_enqueue() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SpoolProbeState {
+                enqueue_failures_remaining: 1,
                 ..SpoolProbeState::default()
             })),
         }
@@ -341,6 +363,11 @@ impl SpoolProbe {
 impl LocalSpool for SpoolProbe {
     fn enqueue(&mut self, batch: IngestBatch) -> Result<SpoolEntryId, AgentError> {
         let mut inner = self.inner.lock().unwrap();
+        if inner.enqueue_failures_remaining > 0 {
+            inner.enqueue_failures_remaining -= 1;
+            return Err(AgentError::spool("enqueue failed"));
+        }
+
         let id = SpoolEntryId::from(format!("spool-{}", inner.enqueued_batches.len() + 1));
         inner.enqueued_batches.push(batch.clone());
         inner
