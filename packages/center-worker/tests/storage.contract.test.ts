@@ -220,6 +220,21 @@ describe("center-worker storage contract", () => {
       diagnostics: [expect.objectContaining({ path: "entrypoint" })],
     });
     expect(bucket.objectBody("content/revision-2/assets/index.js")).toBeNull();
+
+    await expect(
+      store.writeContentBuildArtifacts({
+        revision: "revision-3",
+        entrypoint: "index.html",
+        artifacts: [
+          { path: "index.html", body: "<main>first</main>" },
+          { path: "index.html", body: "<main>second</main>" },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_content_build_payload",
+      diagnostics: [expect.objectContaining({ path: "artifacts.1.path" })],
+    });
+    expect(bucket.objectBody("content/revision-3/index.html")).toBeNull();
   });
 
   it("rewrites CSS asset responses before serving them", async () => {
