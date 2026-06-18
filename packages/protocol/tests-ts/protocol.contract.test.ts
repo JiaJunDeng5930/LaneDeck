@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ProtocolError,
+  parseAgentControlMessage,
   parseFrame,
   parseIngestBatch,
   parseLaneConfig,
@@ -24,6 +25,14 @@ const validCountFrame = {
     },
   ],
   summary: {},
+};
+
+const validLaneConfig = {
+  laneId: "lane.test-runtime",
+  displayName: "Test Runtime",
+  rawStage: { mode: "builtin", settings: {} },
+  metricStage: { mode: "passthrough", settings: {} },
+  eventStage: { mode: "empty", settings: {} },
 };
 
 describe("protocol frame contract", () => {
@@ -226,6 +235,44 @@ describe("protocol wire contract", () => {
     { type: "error_report", payload: { message: "render failed" } },
   ])("accepts shell-content message $type", (message) => {
     expect(parseShellContentMessage(message)).toMatchObject(message);
+  });
+
+  it("accepts agent build control messages", () => {
+    expect(
+      parseAgentControlMessage({
+        type: "build_content",
+        messageId: "control-build-main",
+        contentId: "content.home",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      }),
+    ).toMatchObject({
+      type: "build_content",
+      messageId: "control-build-main",
+      contentId: "content.home",
+    });
+  });
+
+  it("accepts agent lane reload control messages", () => {
+    expect(
+      parseAgentControlMessage({
+        type: "reload_lane_config",
+        messageId: "control-reload-lane",
+        config: validLaneConfig,
+      }),
+    ).toMatchObject({
+      type: "reload_lane_config",
+      messageId: "control-reload-lane",
+      config: { laneId: "lane.test-runtime" },
+    });
+  });
+
+  it("rejects agent control messages without message ids", () => {
+    expect(() =>
+      parseAgentControlMessage({
+        type: "heartbeat",
+      }),
+    ).toThrow(ProtocolError);
   });
 
   it("rejects structured-clone objects outside JSON object shape", () => {
