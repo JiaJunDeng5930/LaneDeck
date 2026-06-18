@@ -553,7 +553,9 @@ describe("center-worker contract", () => {
     );
 
     const response = await handleRequest(
-      new Request("https://center.local/content/revision-1/assets/my%20logo.svg"),
+      new Request(
+        "https://center.local/content/revision-1/assets/my%20logo.svg",
+      ),
       {
         ...harness.env,
         LANEDECK_BUCKET: bucket as unknown as R2Bucket,
@@ -567,7 +569,9 @@ describe("center-worker contract", () => {
   it("GET /content rejects encoded slash inside asset path segments", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      new Request("https://center.local/content/revision-1/assets/my%2Flogo.svg"),
+      new Request(
+        "https://center.local/content/revision-1/assets/my%2Flogo.svg",
+      ),
       harness.env,
     );
 
