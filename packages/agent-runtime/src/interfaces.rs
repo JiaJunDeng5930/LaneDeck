@@ -19,6 +19,12 @@ pub trait CenterClient {
 pub trait LocalSpool {
     fn load_lane_frame_cursor(&mut self, lane_id: &str) -> Result<u64, AgentError>;
 
+    fn allocate_runtime_seed(
+        &mut self,
+        workspace_id: &str,
+        machine_id: &str,
+    ) -> Result<String, AgentError>;
+
     fn load_control_message(
         &mut self,
         message_id: &ControlMessageId,

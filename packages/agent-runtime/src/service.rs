@@ -1,8 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Duration, Utc};
 use lanedeck_lane_engine::{
@@ -21,7 +19,7 @@ use crate::{
 };
 
 const BUILD_CONTENT_TIMEOUT_SECONDS: i64 = 300;
-static NEXT_RUNTIME_SEED: AtomicU64 = AtomicU64::new(1);
+const CONTROL_COMPLETION_CACHE_LIMIT: usize = 128;
 
 pub struct AgentService<C, P, R> {
     center: C,
@@ -29,11 +27,13 @@ pub struct AgentService<C, P, R> {
     runner: Arc<R>,
     workspace_id: String,
     machine_id: String,
+    control_url: String,
     runtime_seed: String,
     flush_limit: usize,
     lanes: Vec<LaneRuntime<R>>,
     next_batch_no: u64,
     retained_batches: VecDeque<IngestBatch>,
+    control_completion_cache: VecDeque<(crate::ControlMessageId, Result<ControlReply, AgentError>)>,
 }
 
 struct LaneRuntime<R> {
@@ -82,6 +82,11 @@ where
             return Err(AgentError::config("flush.maxBatchSize must be positive"));
         }
 
+        let workspace_id = config.workspace_id;
+        let machine_id = config.machine_id;
+        let control_url = config.control.url;
+        let flush_limit = config.flush.max_batch_size;
+        let runtime_seed = spool.allocate_runtime_seed(&workspace_id, &machine_id)?;
         let runner = Arc::new(runner);
         let mut lanes = Vec::with_capacity(config.lanes.len());
         let mut lane_ids = HashSet::with_capacity(config.lanes.len());
@@ -116,14 +121,26 @@ where
             center,
             spool,
             runner,
-            workspace_id: config.workspace_id,
-            machine_id: config.machine_id,
-            runtime_seed: new_runtime_seed(),
-            flush_limit: config.flush.max_batch_size,
+            workspace_id,
+            machine_id,
+            control_url,
+            runtime_seed,
+            flush_limit,
             lanes,
             next_batch_no: 1,
             retained_batches: VecDeque::new(),
+            control_completion_cache: VecDeque::new(),
         })
+    }
+
+    pub async fn connect_control(&self) -> Result<crate::ControlSession, AgentError> {
+        self.center
+            .connect_control(crate::ControlConnectRequest {
+                workspace_id: self.workspace_id.clone(),
+                machine_id: self.machine_id.clone(),
+                url: self.control_url.clone(),
+            })
+            .await
     }
 
     pub async fn run_once(&mut self, now: DateTime<Utc>) -> Result<AgentRunReport, AgentError> {
@@ -273,6 +290,9 @@ where
     ) -> Result<ControlReply, AgentError> {
         let message_id = message.message_id().clone();
 
+        if let Some(result) = self.cached_control_completion(&message_id) {
+            return result;
+        }
         match self.spool.load_control_message(&message_id)? {
             Some(crate::ControlMessageRecord::Completed(result)) => return result,
             Some(crate::ControlMessageRecord::InProgress) => {
@@ -287,10 +307,36 @@ where
         self.spool
             .mark_control_message_in_progress(message_id.clone())?;
         let result = self.execute_control_message(message).await;
+        self.remember_control_completion(message_id.clone(), result.clone());
         self.spool
             .mark_control_message_completed(message_id, result.clone())?;
 
         result
+    }
+
+    fn cached_control_completion(
+        &self,
+        message_id: &crate::ControlMessageId,
+    ) -> Option<Result<ControlReply, AgentError>> {
+        self.control_completion_cache
+            .iter()
+            .rev()
+            .find(|(cached_id, _)| cached_id == message_id)
+            .map(|(_, result)| result.clone())
+    }
+
+    fn remember_control_completion(
+        &mut self,
+        message_id: crate::ControlMessageId,
+        result: Result<ControlReply, AgentError>,
+    ) {
+        self.control_completion_cache
+            .retain(|(cached_id, _)| cached_id != &message_id);
+        self.control_completion_cache
+            .push_back((message_id, result));
+        while self.control_completion_cache.len() > CONTROL_COMPLETION_CACHE_LIMIT {
+            self.control_completion_cache.pop_front();
+        }
     }
 
     async fn execute_control_message(
@@ -994,15 +1040,6 @@ fn max_history_limit(lane: &LaneConfig, key: &str) -> usize {
         .unwrap_or(0)
 }
 
-fn new_runtime_seed() -> String {
-    let sequence = NEXT_RUNTIME_SEED.fetch_add(1, Ordering::Relaxed);
-    let started_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    format!("runtime-{started_at}-{sequence}")
-}
-
 fn retained_enqueue_error(batch: &IngestBatch, error: AgentError) -> AgentError {
     AgentError::spool(format!(
         "local spool enqueue failed for ingest batch {}; agent-runtime retained ownership for next run retry: {error}",
@@ -1011,5 +1048,8 @@ fn retained_enqueue_error(batch: &IngestBatch, error: AgentError) -> AgentError 
 }
 
 fn map_engine_error(error: EngineError) -> AgentError {
-    AgentError::lane_engine(error.to_string())
+    match error {
+        EngineError::InvalidConfig(message) => AgentError::config(message),
+        other => AgentError::lane_engine(other.to_string()),
+    }
 }
