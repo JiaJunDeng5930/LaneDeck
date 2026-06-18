@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,13 +40,14 @@ struct LaneRuntime<R> {
     lane: LaneConfig,
     schedule_interval: Duration,
     next_run_at: Option<DateTime<Utc>>,
+    history_store: ServiceHistoryStore,
     engine: LaneEngine<ServiceHistoryStore, ServiceStageRunner<R>>,
 }
 
 #[derive(Clone, Default)]
 struct ServiceHistoryStore {
     inner: Arc<Mutex<ServiceHistoryState>>,
-    limits: HistoryLimits,
+    limits: Arc<Mutex<HistoryLimits>>,
 }
 
 #[derive(Default)]
@@ -81,11 +82,24 @@ where
 
         let runner = Arc::new(runner);
         let mut lanes = Vec::with_capacity(config.lanes.len());
+        let mut lane_ids = HashSet::with_capacity(config.lanes.len());
 
         for lane in config.lanes {
             let schedule_interval = Duration::seconds(lane.schedule.interval_seconds as i64);
+            if lane.lane_id != lane.config.lane_id {
+                return Err(AgentError::config(format!(
+                    "lane {} wrapper laneId must match config.laneId {}",
+                    lane.lane_id, lane.config.lane_id
+                )));
+            }
             let lane_config = lane.config;
-            validate_script_raw_stage(&lane_config)?;
+            if !lane_ids.insert(lane_config.lane_id.clone()) {
+                return Err(AgentError::config(format!(
+                    "lane {} is configured more than once",
+                    lane_config.lane_id
+                )));
+            }
+            validate_lane_config(&lane_config)?;
             let next_frame_no = spool.load_lane_frame_cursor(&lane_config.lane_id)?;
             lanes.push(LaneRuntime::new(
                 lane_config,
@@ -260,7 +274,7 @@ where
     }
 
     fn reload_lane_config(&mut self, lane_config: LaneConfig) -> Result<(), AgentError> {
-        validate_script_raw_stage(&lane_config)?;
+        validate_lane_config(&lane_config)?;
         let lane_id = lane_config.lane_id.clone();
         let existing = self
             .lanes
@@ -378,9 +392,10 @@ where
         runner: Arc<R>,
         next_frame_no: u64,
     ) -> Result<Self, AgentError> {
+        let history_store = ServiceHistoryStore::with_limits(history_limits(&lane));
         let engine = LaneEngine::new_with_next_frame_no(
             lane.clone(),
-            ServiceHistoryStore::with_limits(history_limits(&lane)),
+            history_store.clone(),
             ServiceStageRunner { runner },
             next_frame_no,
         )
@@ -390,6 +405,7 @@ where
             lane,
             schedule_interval,
             next_run_at: None,
+            history_store,
             engine,
         })
     }
@@ -407,6 +423,7 @@ where
         self.engine
             .replace_config(lane.clone())
             .map_err(map_engine_error)?;
+        self.history_store.replace_limits(history_limits(&lane))?;
         self.lane = lane;
 
         Ok(())
@@ -417,8 +434,16 @@ impl ServiceHistoryStore {
     fn with_limits(limits: HistoryLimits) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ServiceHistoryState::default())),
-            limits,
+            limits: Arc::new(Mutex::new(limits)),
         }
+    }
+
+    fn replace_limits(&self, limits: HistoryLimits) -> Result<(), AgentError> {
+        *self
+            .limits
+            .lock()
+            .map_err(|error| AgentError::lane_engine(error.to_string()))? = limits;
+        Ok(())
     }
 }
 
@@ -440,18 +465,22 @@ impl HistoryStore for ServiceHistoryStore {
             .inner
             .lock()
             .map_err(|error| EngineError::Store(error.to_string()))?;
+        let limits = *self
+            .limits
+            .lock()
+            .map_err(|error| EngineError::Store(error.to_string()))?;
         match frame.stage {
             StageKind::Raw => {
                 inner.upstream_frames.push(frame);
-                retain_tail(&mut inner.upstream_frames, self.limits.upstream_frames);
+                retain_tail(&mut inner.upstream_frames, limits.upstream_frames);
             }
             StageKind::Metric => {
                 inner.metric_frames.push(frame);
-                retain_tail(&mut inner.metric_frames, self.limits.metric_frames);
+                retain_tail(&mut inner.metric_frames, limits.metric_frames);
             }
             StageKind::Event => {
                 inner.event_frames.push(frame);
-                retain_tail(&mut inner.event_frames, self.limits.event_frames);
+                retain_tail(&mut inner.event_frames, limits.event_frames);
             }
         }
 
@@ -480,7 +509,7 @@ where
     }
 }
 
-fn validate_script_raw_stage(lane: &LaneConfig) -> Result<(), AgentError> {
+fn validate_lane_config(lane: &LaneConfig) -> Result<(), AgentError> {
     if lane.raw_stage.mode != StageMode::Script {
         return Err(AgentError::config(format!(
             "lane {} rawStage.mode must be script",
@@ -488,10 +517,44 @@ fn validate_script_raw_stage(lane: &LaneConfig) -> Result<(), AgentError> {
         )));
     }
 
-    let settings = &lane.raw_stage.settings;
-    string_setting(settings, "command", &lane.lane_id)?;
-    path_setting(settings, "cwd", &lane.lane_id)?;
-    timeout_setting(settings, &lane.lane_id)?;
+    validate_script_settings(&lane.raw_stage.settings, "rawStage", &lane.lane_id)?;
+    validate_optional_script_stage(
+        &lane.metric_stage.mode,
+        &lane.metric_stage.settings,
+        "metricStage",
+        &lane.lane_id,
+    )?;
+    validate_optional_script_stage(
+        &lane.event_stage.mode,
+        &lane.event_stage.settings,
+        "eventStage",
+        &lane.lane_id,
+    )?;
+
+    Ok(())
+}
+
+fn validate_optional_script_stage(
+    mode: &StageMode,
+    settings: &Value,
+    stage_path: &str,
+    lane_id: &str,
+) -> Result<(), AgentError> {
+    if *mode == StageMode::Script {
+        validate_script_settings(settings, stage_path, lane_id)?;
+    }
+
+    Ok(())
+}
+
+fn validate_script_settings(
+    settings: &Value,
+    stage_path: &str,
+    lane_id: &str,
+) -> Result<(), AgentError> {
+    string_setting(settings, "command", lane_id, stage_path)?;
+    path_setting(settings, "cwd", lane_id, stage_path)?;
+    timeout_setting(settings, lane_id, stage_path)?;
 
     Ok(())
 }
@@ -502,12 +565,12 @@ fn collect_source_request(lane: &LaneConfig) -> Result<ScriptRunRequest, AgentEr
     Ok(ScriptRunRequest {
         purpose: ScriptPurpose::CollectSource,
         lane_id: lane.lane_id.clone(),
-        command: string_setting(settings, "command", &lane.lane_id)?,
-        cwd: path_setting(settings, "cwd", &lane.lane_id)?.into(),
+        command: string_setting(settings, "command", &lane.lane_id, "rawStage")?,
+        cwd: path_setting(settings, "cwd", &lane.lane_id, "rawStage")?.into(),
         input: None,
-        timeout: Duration::seconds(timeout_setting(settings, &lane.lane_id)?),
-        capture_stdout: bool_setting(settings, "captureStdout", true, &lane.lane_id)?,
-        capture_stderr: bool_setting(settings, "captureStderr", true, &lane.lane_id)?,
+        timeout: Duration::seconds(timeout_setting(settings, &lane.lane_id, "rawStage")?),
+        capture_stdout: bool_setting(settings, "captureStdout", true, &lane.lane_id, "rawStage")?,
+        capture_stderr: bool_setting(settings, "captureStderr", true, &lane.lane_id, "rawStage")?,
         side_effect_policy: ScriptSideEffectPolicy::LaneSourceReadBoundary,
     })
 }
@@ -590,9 +653,9 @@ fn split_effects(effects: Vec<EngineEffect>) -> (Vec<Frame>, Vec<Diagnostic>) {
 }
 
 fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequest, EngineError> {
-    let settings = match invocation.current_frame.stage {
-        StageKind::Raw => &invocation.lane.metric_stage.settings,
-        StageKind::Metric => &invocation.lane.event_stage.settings,
+    let (settings, stage_path) = match invocation.current_frame.stage {
+        StageKind::Raw => (&invocation.lane.metric_stage.settings, "metricStage"),
+        StageKind::Metric => (&invocation.lane.event_stage.settings, "eventStage"),
         StageKind::Event => {
             return Err(EngineError::Runner(
                 "event frames do not have downstream script stages".to_string(),
@@ -604,9 +667,9 @@ fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequ
     Ok(ScriptRunRequest {
         purpose: ScriptPurpose::TransformStage,
         lane_id: lane_id.clone(),
-        command: string_setting(settings, "command", lane_id)
+        command: string_setting(settings, "command", lane_id, stage_path)
             .map_err(|error| EngineError::Runner(error.to_string()))?,
-        cwd: path_setting(settings, "cwd", lane_id)
+        cwd: path_setting(settings, "cwd", lane_id, stage_path)
             .map_err(|error| EngineError::Runner(error.to_string()))?
             .into(),
         input: Some(
@@ -614,46 +677,58 @@ fn transform_stage_request(invocation: &StageInvocation) -> Result<ScriptRunRequ
                 .map_err(|error| EngineError::Runner(error.to_string()))?,
         ),
         timeout: Duration::seconds(
-            timeout_setting(settings, lane_id)
+            timeout_setting(settings, lane_id, stage_path)
                 .map_err(|error| EngineError::Runner(error.to_string()))?,
         ),
-        capture_stdout: bool_setting(settings, "captureStdout", true, lane_id)
+        capture_stdout: bool_setting(settings, "captureStdout", true, lane_id, stage_path)
             .map_err(|error| EngineError::Runner(error.to_string()))?,
-        capture_stderr: bool_setting(settings, "captureStderr", true, lane_id)
+        capture_stderr: bool_setting(settings, "captureStderr", true, lane_id, stage_path)
             .map_err(|error| EngineError::Runner(error.to_string()))?,
         side_effect_policy: ScriptSideEffectPolicy::StageTransformBoundary,
     })
 }
 
-fn string_setting(settings: &Value, key: &str, lane_id: &str) -> Result<String, AgentError> {
+fn string_setting(
+    settings: &Value,
+    key: &str,
+    lane_id: &str,
+    stage_path: &str,
+) -> Result<String, AgentError> {
     settings
         .get(key)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| {
             AgentError::config(format!(
-                "lane {lane_id} rawStage.settings.{key} must be a string"
+                "lane {lane_id} {stage_path}.settings.{key} must be a string"
             ))
         })
 }
 
-fn path_setting(settings: &Value, key: &str, lane_id: &str) -> Result<PathBuf, AgentError> {
-    Ok(PathBuf::from(string_setting(settings, key, lane_id)?))
+fn path_setting(
+    settings: &Value,
+    key: &str,
+    lane_id: &str,
+    stage_path: &str,
+) -> Result<PathBuf, AgentError> {
+    Ok(PathBuf::from(string_setting(
+        settings, key, lane_id, stage_path,
+    )?))
 }
 
-fn timeout_setting(settings: &Value, lane_id: &str) -> Result<i64, AgentError> {
+fn timeout_setting(settings: &Value, lane_id: &str, stage_path: &str) -> Result<i64, AgentError> {
     let seconds = settings
         .get("timeoutSeconds")
         .and_then(Value::as_i64)
         .ok_or_else(|| {
             AgentError::config(format!(
-                "lane {lane_id} rawStage.settings.timeoutSeconds must be an integer"
+                "lane {lane_id} {stage_path}.settings.timeoutSeconds must be an integer"
             ))
         })?;
 
     if seconds <= 0 {
         return Err(AgentError::config(format!(
-            "lane {lane_id} rawStage.settings.timeoutSeconds must be positive"
+            "lane {lane_id} {stage_path}.settings.timeoutSeconds must be positive"
         )));
     }
 
@@ -665,12 +740,13 @@ fn bool_setting(
     key: &str,
     default: bool,
     lane_id: &str,
+    stage_path: &str,
 ) -> Result<bool, AgentError> {
     match settings.get(key) {
         Some(Value::Bool(value)) => Ok(*value),
         None => Ok(default),
         Some(_) => Err(AgentError::config(format!(
-            "lane {lane_id} rawStage.settings.{key} must be a boolean"
+            "lane {lane_id} {stage_path}.settings.{key} must be a boolean"
         ))),
     }
 }
