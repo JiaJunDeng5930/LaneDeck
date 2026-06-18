@@ -56,6 +56,10 @@ export class LiveHub {
     return this.sendTo(this.agents, message);
   }
 
+  sendToAgent(socket: LiveSocket, message: AgentControlMessage): number {
+    return this.sendOne(socket, JSON.stringify(message));
+  }
+
   private sendTo(
     sockets: Set<LiveSocket>,
     message: BrowserLiveMessage | AgentControlMessage,
@@ -64,15 +68,20 @@ export class LiveHub {
     let delivered = 0;
 
     for (const socket of sockets) {
-      try {
-        socket.send(encoded);
-        delivered += 1;
-      } catch {
-        sockets.delete(socket);
-      }
+      delivered += this.sendOne(socket, encoded);
     }
 
     return delivered;
+  }
+
+  private sendOne(socket: LiveSocket, encoded: string): number {
+    try {
+      socket.send(encoded);
+      return 1;
+    } catch {
+      this.remove(socket);
+      return 0;
+    }
   }
 }
 

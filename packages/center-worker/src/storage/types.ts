@@ -51,5 +51,6 @@ export interface CenterStorage {
   saveContentRevision(record: ContentRevisionRecord): Promise<boolean>;
   getCurrentContent(workspaceId: string): Promise<ContentRevisionRecord | null>;
   saveLaneRevision(record: LaneRevisionRecord): Promise<boolean>;
+  listCurrentLaneRevisions(workspaceId: string): Promise<LaneRevisionRecord[]>;
   saveMutation(request: MutationRequest, mutationId: string): Promise<number>;
 }

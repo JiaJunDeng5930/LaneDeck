@@ -848,6 +848,27 @@ class MemoryCenterStorage implements CenterStorage {
     );
   }
 
+  async listCurrentLaneRevisions(
+    workspaceId: string,
+  ): Promise<LaneRevisionRecord[]> {
+    const byLane = new Map<string, LaneRevisionRecord>();
+    for (const record of this.laneRevisions) {
+      if (record.workspaceId !== workspaceId) {
+        continue;
+      }
+      const current = byLane.get(record.laneId);
+      if (
+        current === undefined ||
+        current.mutationSequence <= record.mutationSequence
+      ) {
+        byLane.set(record.laneId, record);
+      }
+    }
+    return [...byLane.values()].sort((left, right) =>
+      left.laneId.localeCompare(right.laneId),
+    );
+  }
+
   async saveMutation(request: MutationRequest): Promise<number> {
     this.writeCount += 1;
     this.mutationSequence += 1;

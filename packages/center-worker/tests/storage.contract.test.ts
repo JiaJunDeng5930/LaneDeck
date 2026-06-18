@@ -413,10 +413,11 @@ class FakeD1Database {
       const [workspaceId] = bindings as string[];
       const results = [...this.frames.values()]
         .filter((row) => row.workspace_id === workspaceId)
-        .sort((left, right) =>
-          right.closed_at.localeCompare(left.closed_at) ||
-          right.batch_id.localeCompare(left.batch_id) ||
-          left.lane_id.localeCompare(right.lane_id),
+        .sort(
+          (left, right) =>
+            right.closed_at.localeCompare(left.closed_at) ||
+            right.batch_id.localeCompare(left.batch_id) ||
+            left.lane_id.localeCompare(right.lane_id),
         );
       return { results: results as T[] };
     }
@@ -545,7 +546,11 @@ function contentKey(workspaceId: string, revision: string): string {
   return `${workspaceId}:${revision}`;
 }
 
-function laneKey(workspaceId: string, laneId: string, revision: string): string {
+function laneKey(
+  workspaceId: string,
+  laneId: string,
+  revision: string,
+): string {
   return `${workspaceId}:${laneId}:${revision}`;
 }
 

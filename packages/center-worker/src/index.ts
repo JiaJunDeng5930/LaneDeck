@@ -49,21 +49,21 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   }
 
   async connectAgent(request: Request): Promise<Response> {
-    return this.openLiveSocket(request, "agent");
+    return await this.openLiveSocket(request, "agent");
   }
 
   async connectBrowser(request: Request): Promise<Response> {
-    return this.openLiveSocket(request, "browser");
+    return await this.openLiveSocket(request, "browser");
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/ws/agent") {
-      return this.openLiveSocket(request, "agent");
+      return await this.openLiveSocket(request, "agent");
     }
 
     if (url.pathname === "/ws/browser") {
-      return this.openLiveSocket(request, "browser");
+      return await this.openLiveSocket(request, "browser");
     }
 
     return errorResponse(
@@ -85,10 +85,10 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     this.live.remove(ws);
   }
 
-  private openLiveSocket(
+  private async openLiveSocket(
     request: Request,
     kind: "agent" | "browser",
-  ): Response {
+  ): Promise<Response> {
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return errorResponse(
         new ApiError(426, "upgrade_required", [
@@ -104,11 +104,23 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
     if (kind === "agent") {
       this.live.addAgent(server);
+      await this.service.replayCurrentLaneConfigs(
+        this.workspaceIdForRequest(request),
+        server,
+      );
     } else {
       this.live.addBrowser(server);
     }
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private workspaceIdForRequest(request: Request): string {
+    return (
+      new URL(request.url).searchParams.get("workspaceId") ??
+      this.ctx.id.name ??
+      "workspace"
+    );
   }
 }
 

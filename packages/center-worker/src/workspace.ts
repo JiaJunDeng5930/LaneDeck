@@ -13,7 +13,7 @@ import type {
 } from "@lanedeck/protocol";
 
 import { badRequest } from "./errors";
-import { LiveHub } from "./live";
+import { LiveHub, type LiveSocket } from "./live";
 import { contentRevisionToJson } from "./storage/d1";
 import { normalizeObjectPath } from "./storage/r2";
 
@@ -139,6 +139,25 @@ export class WorkspaceService {
     });
   }
 
+  async replayCurrentLaneConfigs(
+    workspaceId: string,
+    socket: LiveSocket,
+  ): Promise<number> {
+    const lanes =
+      await this.options.storage.listCurrentLaneRevisions(workspaceId);
+    let delivered = 0;
+
+    for (const lane of lanes) {
+      delivered += this.options.live.sendToAgent(socket, {
+        type: "reload_lane_config",
+        messageId: laneReloadControlMessageId(lane.revision),
+        config: parseLaneConfig(lane.settings),
+      });
+    }
+
+    return delivered;
+  }
+
   private async patchContent(
     request: MutationRequest,
     mutationId: string,
@@ -217,10 +236,9 @@ export class WorkspaceService {
       laneId: payload.config.laneId,
       laneRevision,
     });
-    const controlMessageId = this.idGenerator();
     const delivered = this.options.live.sendToAgents({
       type: "reload_lane_config",
-      messageId: controlMessageId,
+      messageId: laneReloadControlMessageId(laneRevision),
       config: payload.config,
     });
     return {
@@ -337,6 +355,10 @@ function supersededDiagnostics(isCurrent: boolean, path: string): Diagnostic[] {
       message: "superseded by newer mutation sequence",
     },
   ];
+}
+
+function laneReloadControlMessageId(laneRevision: string): string {
+  return `reload_lane_config:${laneRevision}`;
 }
 
 function jsonObjectFromLaneConfig(config: LaneConfig): JsonObject {

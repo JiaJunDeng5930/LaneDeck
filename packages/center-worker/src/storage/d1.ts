@@ -39,6 +39,16 @@ interface ContentRevisionRow {
   metadata_json: string;
 }
 
+interface LaneRevisionRow {
+  workspace_id: string;
+  mutation_id: string;
+  mutation_sequence: number;
+  lane_id: string;
+  revision: string;
+  settings_json: string;
+  created_at: string;
+}
+
 const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS ingest_batches (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, frame_count INTEGER NOT NULL, ingested_at TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id))",
   "CREATE TABLE IF NOT EXISTS frames (workspace_id TEXT NOT NULL, machine_id TEXT NOT NULL, batch_id TEXT NOT NULL, lane_id TEXT NOT NULL, stage TEXT NOT NULL, frame_no INTEGER NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL, trigger_kind TEXT NOT NULL, record_count INTEGER NOT NULL, summary_json TEXT NOT NULL, PRIMARY KEY (workspace_id, machine_id, batch_id, lane_id, stage, frame_no))",
@@ -60,6 +70,8 @@ export class D1CenterStorage implements CenterStorage {
 
   async saveIngestBatch(batch: IngestBatch, ingestedAt: string): Promise<void> {
     const statements = [
+      this.deleteBatchFrameRecords(batch),
+      this.deleteBatchFrames(batch),
       this.db
         .prepare(
           `INSERT OR REPLACE INTO ingest_batches (
@@ -252,6 +264,34 @@ export class D1CenterStorage implements CenterStorage {
     );
   }
 
+  async listCurrentLaneRevisions(
+    workspaceId: string,
+  ): Promise<LaneRevisionRecord[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT
+          lane_revisions.workspace_id,
+          lane_revisions.mutation_id,
+          lane_revisions.mutation_sequence,
+          lane_revisions.lane_id,
+          lane_revisions.revision,
+          lane_revisions.settings_json,
+          lane_revisions.created_at
+        FROM workspace_pointers
+        JOIN lane_revisions
+          ON lane_revisions.workspace_id = workspace_pointers.workspace_id
+          AND workspace_pointers.pointer_key = 'lane_revision:' || lane_revisions.lane_id
+          AND workspace_pointers.pointer_value = lane_revisions.revision
+        WHERE workspace_pointers.workspace_id = ?
+          AND workspace_pointers.pointer_key LIKE 'lane_revision:%'
+        ORDER BY lane_revisions.lane_id ASC`,
+      )
+      .bind(workspaceId)
+      .all<LaneRevisionRow>();
+
+    return rows.results.map(laneRevisionFromRow);
+  }
+
   async saveMutation(
     request: MutationRequest,
     mutationId: string,
@@ -313,6 +353,24 @@ export class D1CenterStorage implements CenterStorage {
         frame.recordCount,
         JSON.stringify(frame.summary),
       );
+  }
+
+  private deleteBatchFrames(batch: IngestBatch): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `DELETE FROM frames
+        WHERE workspace_id = ? AND machine_id = ? AND batch_id = ?`,
+      )
+      .bind(batch.workspaceId, batch.machineId, batch.batchId);
+  }
+
+  private deleteBatchFrameRecords(batch: IngestBatch): D1PreparedStatement {
+    return this.db
+      .prepare(
+        `DELETE FROM frame_records
+        WHERE workspace_id = ? AND machine_id = ? AND batch_id = ?`,
+      )
+      .bind(batch.workspaceId, batch.machineId, batch.batchId);
   }
 
   private insertFrameRecord(
@@ -404,6 +462,18 @@ function contentRevisionFromRow(
     assetKey: row.asset_key,
     createdAt: row.created_at,
     metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+function laneRevisionFromRow(row: LaneRevisionRow): LaneRevisionRecord {
+  return {
+    workspaceId: row.workspace_id,
+    mutationId: row.mutation_id,
+    mutationSequence: row.mutation_sequence,
+    laneId: row.lane_id,
+    revision: row.revision,
+    settings: parseJsonObject(row.settings_json),
+    createdAt: row.created_at,
   };
 }
 
