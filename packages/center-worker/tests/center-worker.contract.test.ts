@@ -470,6 +470,47 @@ describe("center-worker contract", () => {
     expect(harness.storage.mutations).toHaveLength(0);
   });
 
+  it.each([
+    "machineId",
+    "contentId",
+    "contentRevision",
+    "cwd",
+    "command",
+  ] as const)(
+    "empty local build %s returns diagnostics without mutation log writes",
+    async (field) => {
+      const harness = createHarness();
+      const payload = {
+        machineId: "machine.local",
+        contentId: "content.home",
+        contentRevision: "revision-1",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      };
+      payload[field] = "";
+
+      const response = await handleRequest(
+        jsonRequest(
+          "/api/ai/mutation",
+          {
+            workspaceId: "workspace.local",
+            mutation: "request_local_build",
+            payload,
+          },
+          "ai-token",
+        ),
+        harness.env,
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "invalid_mutation_payload",
+        diagnostics: [expect.objectContaining({ path: `payload.${field}` })],
+      });
+      expect(harness.storage.mutations).toHaveLength(0);
+    },
+  );
+
   it("POST /api/ai/mutation rejects wrong token before payload validation", async () => {
     const harness = createHarness();
     const response = await handleRequest(
@@ -876,6 +917,46 @@ describe("center-worker contract", () => {
       diagnostics: [expect.objectContaining({ path: "buildRequestId" })],
     });
   });
+
+  it.each(["machineId", "buildRequestId", "contentRevision"] as const)(
+    "POST /api/content/build-complete rejects empty %s before coordinator fetch",
+    async (field) => {
+      let fetched = false;
+      const payload = {
+        workspaceId: "workspace.local",
+        machineId: "machine.local",
+        buildRequestId: "build-1",
+        contentRevision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+      };
+      payload[field] = "";
+
+      const response = await handleRequest(
+        jsonRequest("/api/content/build-complete", payload, "agent-token"),
+        {
+          WORKSPACE_COORDINATOR: {
+            getByName: () => {
+              fetched = true;
+              return createHarness().coordinator("workspace.local");
+            },
+          },
+          LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+          LANEDECK_AGENT_TOKEN: "agent-token",
+          LANEDECK_READ_TOKEN: "read-token",
+          LANEDECK_DB: {},
+          LANEDECK_BUCKET: {},
+        },
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "invalid_content_build_completion",
+        diagnostics: [expect.objectContaining({ path: field })],
+      });
+      expect(fetched).toBe(false);
+    },
+  );
 
   it("POST /api/content/build-complete converts coordinator validation results to JSON errors", async () => {
     const response = await handleRequest(
