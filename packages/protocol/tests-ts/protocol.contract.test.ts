@@ -248,6 +248,8 @@ describe("protocol wire contract", () => {
         contentRevision: "revision-1",
         cwd: "/workspace/content",
         command: "corepack pnpm --filter @lanedeck/content build",
+        sourcePath: "src/App.tsx",
+        source: "<App />",
       }),
     ).toMatchObject({
       type: "build_content",
@@ -255,6 +257,8 @@ describe("protocol wire contract", () => {
       machineId: "machine.devbox",
       contentId: "content.home",
       contentRevision: "revision-1",
+      sourcePath: "src/App.tsx",
+      source: "<App />",
     });
   });
 
@@ -264,6 +268,20 @@ describe("protocol wire contract", () => {
         type: "build_content",
         messageId: "control-build-main",
         contentId: "content.home",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("rejects agent build control messages without source payload", () => {
+    expect(() =>
+      parseAgentControlMessage({
+        type: "build_content",
+        messageId: "control-build-main",
+        machineId: "machine.devbox",
+        contentId: "content.home",
+        contentRevision: "revision-1",
         cwd: "/workspace/content",
         command: "corepack pnpm --filter @lanedeck/content build",
       }),
@@ -282,12 +300,12 @@ describe("protocol wire contract", () => {
         artifacts: [
           {
             path: "index.html",
-            body: '<div id="root"></div>',
+            bodyBase64: "PGRpdiBpZD0icm9vdCI+PC9kaXY+",
             contentType: "text/html; charset=utf-8",
           },
           {
             path: "assets/index.js",
-            body: "console.log('ok')",
+            bodyBase64: "Y29uc29sZS5sb2coJ29rJyk=",
           },
         ],
       }),
@@ -308,7 +326,9 @@ describe("protocol wire contract", () => {
         buildRequestId: "build-1",
         contentRevision: "revision-1",
         entrypoint: "index.html",
-        artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+        artifacts: [
+          { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+        ],
       }),
     ).toThrow(ProtocolError);
   });
@@ -322,6 +342,20 @@ describe("protocol wire contract", () => {
         contentId: "content.home",
         contentRevision: "revision-1",
         entrypoint: "index.html",
+      }),
+    ).toThrow(ProtocolError);
+  });
+
+  it("rejects content build artifacts with text bodies", () => {
+    expect(() =>
+      parseContentBuildCompleteRequest({
+        workspaceId: "workspace.local",
+        machineId: "machine.devbox",
+        buildRequestId: "build-1",
+        contentId: "content.home",
+        contentRevision: "revision-1",
+        entrypoint: "index.html",
+        artifacts: [{ path: "index.html", body: "<main>built</main>" }],
       }),
     ).toThrow(ProtocolError);
   });

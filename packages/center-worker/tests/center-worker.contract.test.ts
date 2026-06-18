@@ -834,12 +834,12 @@ describe("center-worker contract", () => {
           artifacts: [
             {
               path: "index.html",
-              body: '<div id="root"></div>',
+              bodyBase64: "PGRpdiBpZD0icm9vdCI+PC9kaXY+",
               contentType: "text/html; charset=utf-8",
             },
             {
               path: "assets/index.js",
-              body: "console.log('ok')",
+              bodyBase64: "Y29uc29sZS5sb2coJ29rJyk=",
               contentType: "text/javascript; charset=utf-8",
             },
           ],
@@ -908,7 +908,9 @@ describe("center-worker contract", () => {
           contentId: "content.home",
           contentRevision: "id-2",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -961,7 +963,9 @@ describe("center-worker contract", () => {
           contentId: "content.other",
           contentRevision: "id-2",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -991,7 +995,9 @@ describe("center-worker contract", () => {
           contentId: "content.home",
           contentRevision: "revision-1",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -1021,7 +1027,9 @@ describe("center-worker contract", () => {
         contentId: "content.home",
         contentRevision: "revision-1",
         entrypoint: "index.html",
-        artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+        artifacts: [
+          { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+        ],
       };
       payload[field] = "";
 
@@ -1062,7 +1070,9 @@ describe("center-worker contract", () => {
           contentId: "content.home",
           contentRevision: "revision-1",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -1096,6 +1106,58 @@ describe("center-worker contract", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "invalid_content_build_completion",
       diagnostics: [expect.objectContaining({ path: "buildRequestId" })],
+    });
+  });
+
+  it("POST /api/ai/mutation converts coordinator validation results to JSON errors", async () => {
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/ai/mutation",
+        {
+          workspaceId: "workspace.local",
+          mutation: "request_local_build",
+          payload: {
+            machineId: "machine.local",
+            contentId: "content.home",
+            contentRevision: "missing-revision",
+            cwd: "/workspace/content",
+            command: "corepack pnpm --filter @lanedeck/content build",
+          },
+        },
+        "ai-token",
+      ),
+      {
+        WORKSPACE_COORDINATOR: {
+          getByName: () => ({
+            mutate: async () => ({
+              ok: false,
+              error: {
+                status: 400,
+                code: "invalid_mutation_payload",
+                diagnostics: [
+                  {
+                    path: "payload.contentRevision",
+                    message: "expected existing content revision",
+                  },
+                ],
+              },
+            }),
+          }),
+        },
+        LANEDECK_AI_MUTATION_TOKEN: "ai-token",
+        LANEDECK_AGENT_TOKEN: "agent-token",
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_mutation_payload",
+      diagnostics: [
+        expect.objectContaining({ path: "payload.contentRevision" }),
+      ],
     });
   });
 
@@ -1134,7 +1196,9 @@ describe("center-worker contract", () => {
           contentId: "content.home",
           contentRevision: "id-2",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -1183,7 +1247,9 @@ describe("center-worker contract", () => {
           contentId: "content.home",
           contentRevision: "missing-revision",
           entrypoint: "index.html",
-          artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+          artifacts: [
+            { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+          ],
         },
         "agent-token",
       ),
@@ -1230,7 +1296,9 @@ describe("center-worker contract", () => {
       contentId: "content.home",
       contentRevision: "id-2",
       entrypoint: "index.html",
-      artifacts: [{ path: "index.html", body: "<main>built</main>" }],
+      artifacts: [
+        { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+      ],
     };
     const first = await handleRequest(
       jsonRequest("/api/content/build-complete", payload, "agent-token"),
@@ -1264,7 +1332,7 @@ describe("center-worker contract", () => {
     const harness = createHarness();
     const agent = new RecordingSocket();
     harness.live.addAgent(agent, "machine.devbox");
-    seedContentRevision(harness.storage, "workspace.local", "revision-1");
+    seedContentRevision(harness, "workspace.local", "revision-1");
     const buildPayload = {
       machineId: "machine.devbox",
       contentId: "content.home",
@@ -1294,12 +1362,14 @@ describe("center-worker contract", () => {
       contentRevision: "revision-1",
       cwd: "/workspace/content",
       command: "corepack pnpm --filter @lanedeck/content build",
+      sourcePath: "index.html",
+      source: "<main>source</main>",
     });
   });
 
   it("local build mutation reports empty agent delivery", async () => {
     const harness = createHarness();
-    seedContentRevision(harness.storage, "workspace.local", "revision-1");
+    seedContentRevision(harness, "workspace.local", "revision-1");
 
     await expect(
       harness.workspace.mutate({
@@ -1332,7 +1402,7 @@ describe("center-worker contract", () => {
     const secondAgent = new RecordingSocket();
     harness.live.addAgent(firstAgent, "machine.first");
     harness.live.addAgent(secondAgent, "machine.second");
-    seedContentRevision(harness.storage, "workspace.local", "revision-1");
+    seedContentRevision(harness, "workspace.local", "revision-1");
 
     await expect(
       harness.workspace.mutate({
@@ -1357,6 +1427,8 @@ describe("center-worker contract", () => {
         type: "build_content",
         machineId: "machine.second",
         contentRevision: "revision-1",
+        sourcePath: "index.html",
+        source: "<main>source</main>",
       }),
     );
   });
@@ -1868,22 +1940,24 @@ class MemoryCenterStorage implements CenterStorage {
 }
 
 function seedContentRevision(
-  storage: MemoryCenterStorage,
+  harness: ReturnType<typeof createHarness>,
   workspaceId: string,
   revision: string,
 ): void {
-  storage.contentRevisions.push({
+  const sourceKey = `content-source/${workspaceId}/${revision}/index.html`;
+  harness.storage.contentRevisions.push({
     workspaceId,
     mutationId: `seed-${revision}`,
     mutationSequence: 0,
     revision,
     sourcePath: "index.html",
     contentPath: "index.html",
-    sourceKey: `content-source/${workspaceId}/${revision}/index.html`,
+    sourceKey,
     assetKey: null,
     createdAt: "2026-06-10T10:00:00.000Z",
     metadata: {},
   });
+  harness.objects.writes.set(sourceKey, "<main>source</main>");
 }
 
 class SupersededStorage extends MemoryCenterStorage {

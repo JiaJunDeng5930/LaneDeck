@@ -487,12 +487,12 @@ pub fn content_build_script_output() -> ScriptRunOutput {
         "artifacts": [
             {
                 "path": "index.html",
-                "body": "<main>built</main>",
+                "bodyBase64": "PG1haW4+YnVpbHQ8L21haW4+",
                 "contentType": "text/html; charset=utf-8"
             },
             {
                 "path": "assets/index.js",
-                "body": "console.log('ok')"
+                "bodyBase64": "Y29uc29sZS5sb2coJ29rJyk="
             }
         ]
     }))

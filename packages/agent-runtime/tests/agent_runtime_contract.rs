@@ -677,6 +677,8 @@ async fn build_content_control_message_calls_content_build_handler() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap();
@@ -715,6 +717,8 @@ async fn build_content_control_message_posts_build_completion() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap();
@@ -731,7 +735,9 @@ async fn build_content_control_message_posts_build_completion() {
             "machineId": "machine.local",
             "buildRequestId": "control-build-main",
             "contentId": "dashboard-main",
-            "contentRevision": "revision-1"
+            "contentRevision": "revision-1",
+            "sourcePath": "src/App.tsx",
+            "source": "<App />"
         })
     );
     assert_eq!(center.posted_build_completions().len(), 1);
@@ -754,7 +760,7 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
     let mut service = AgentService::new(
         script_lane_agent_config(),
         center.clone(),
-        spool,
+        spool.clone(),
         runner.clone(),
     )
     .unwrap();
@@ -767,6 +773,8 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap_err();
@@ -777,6 +785,41 @@ async fn build_content_control_message_returns_error_when_completion_upload_fail
     }
     assert_eq!(runner.requests().len(), 1);
     assert_eq!(center.posted_build_completions().len(), 1);
+    assert_eq!(
+        spool.control_message_record("control-build-center-failure"),
+        None
+    );
+
+    let retry_center = CenterProbe::accepting();
+    let retry_runner = ScriptRunnerProbe::with_outputs(vec![content_build_script_output()]);
+    let mut retry_service = AgentService::new(
+        script_lane_agent_config(),
+        retry_center.clone(),
+        spool.clone(),
+        retry_runner.clone(),
+    )
+    .unwrap();
+
+    let reply = retry_service
+        .handle_control_message(ControlMessage::build_content(
+            "control-build-center-failure",
+            "machine.local",
+            "dashboard-main",
+            "revision-1",
+            content_root(),
+            "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        reply,
+        ControlReply::accepted("control-build-center-failure", "build_content")
+    );
+    assert_eq!(retry_runner.requests().len(), 1);
+    assert_eq!(retry_center.posted_build_completions().len(), 1);
 }
 
 #[tokio::test]
@@ -796,6 +839,8 @@ async fn build_content_control_message_rejects_other_machine() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap_err();
@@ -819,6 +864,8 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
                 "revision-1",
                 content_root(),
                 "corepack pnpm --filter @lanedeck/content build",
+                "src/App.tsx",
+                "<App />",
             ),
         ),
         (
@@ -830,6 +877,8 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
                 "revision-1",
                 content_root(),
                 "corepack pnpm --filter @lanedeck/content build",
+                "src/App.tsx",
+                "<App />",
             ),
         ),
         (
@@ -841,6 +890,8 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
                 "",
                 content_root(),
                 "corepack pnpm --filter @lanedeck/content build",
+                "src/App.tsx",
+                "<App />",
             ),
         ),
         (
@@ -852,6 +903,8 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
                 "revision-1",
                 PathBuf::new(),
                 "corepack pnpm --filter @lanedeck/content build",
+                "src/App.tsx",
+                "<App />",
             ),
         ),
         (
@@ -862,6 +915,34 @@ async fn build_content_control_message_rejects_empty_identity_fields() {
                 "dashboard-main",
                 "revision-1",
                 content_root(),
+                "",
+                "src/App.tsx",
+                "<App />",
+            ),
+        ),
+        (
+            "sourcePath",
+            ControlMessage::build_content(
+                "control-build-empty-source-path",
+                "machine.local",
+                "dashboard-main",
+                "revision-1",
+                content_root(),
+                "corepack pnpm --filter @lanedeck/content build",
+                "",
+                "<App />",
+            ),
+        ),
+        (
+            "source",
+            ControlMessage::build_content(
+                "control-build-empty-source",
+                "machine.local",
+                "dashboard-main",
+                "revision-1",
+                content_root(),
+                "corepack pnpm --filter @lanedeck/content build",
+                "src/App.tsx",
                 "",
             ),
         ),
@@ -910,6 +991,8 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap();
@@ -921,6 +1004,8 @@ async fn duplicate_side_effecting_control_messages_replay_recorded_reply() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap();
@@ -979,6 +1064,8 @@ async fn control_completion_persist_failure_keeps_replay_path() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap_err();
@@ -990,6 +1077,8 @@ async fn control_completion_persist_failure_keeps_replay_path() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap();
@@ -1061,6 +1150,8 @@ async fn in_progress_control_message_blocks_duplicate_side_effect_execution() {
             "revision-1",
             content_root(),
             "corepack pnpm --filter @lanedeck/content build",
+            "src/App.tsx",
+            "<App />",
         ))
         .await
         .unwrap_err();

@@ -166,12 +166,12 @@ describe("center-worker storage contract", () => {
         artifacts: [
           {
             path: "index.html",
-            body: '<div id="root"></div>',
+            bodyBase64: "PGRpdiBpZD0icm9vdCI+PC9kaXY+",
             contentType: "text/html; charset=utf-8",
           },
           {
             path: "assets/index.js",
-            body: "console.log('ok')",
+            bodyBase64: "Y29uc29sZS5sb2coJ29rJyk=",
           },
         ],
       }),
@@ -190,6 +190,21 @@ describe("center-worker storage contract", () => {
     );
   });
 
+  it("writes build artifact bodies as decoded bytes", async () => {
+    const bucket = new FakeR2Bucket();
+    const store = new R2ContentStore(bucket as unknown as R2Bucket);
+
+    await store.writeContentBuildArtifacts({
+      revision: "revision-binary",
+      entrypoint: "assets/font.woff2",
+      artifacts: [{ path: "assets/font.woff2", bodyBase64: "AP8B" }],
+    });
+
+    expect(bucket.objectBytes("content/revision-binary/assets/font.woff2")).toEqual([
+      0, 255, 1,
+    ]);
+  });
+
   it("validates every build artifact before writing any R2 object", async () => {
     const bucket = new FakeR2Bucket();
     const store = new R2ContentStore(bucket as unknown as R2Bucket);
@@ -199,8 +214,8 @@ describe("center-worker storage contract", () => {
         revision: "revision-1",
         entrypoint: "index.html",
         artifacts: [
-          { path: "index.html", body: "<main>valid</main>" },
-          { path: "assets\\bad.js", body: "console.log('bad')" },
+          { path: "index.html", bodyBase64: "PG1haW4+dmFsaWQ8L21haW4+" },
+          { path: "assets\\bad.js", bodyBase64: "Y29uc29sZS5sb2coJ2JhZCcp" },
         ],
       }),
     ).rejects.toMatchObject({
@@ -213,7 +228,9 @@ describe("center-worker storage contract", () => {
       store.writeContentBuildArtifacts({
         revision: "revision-2",
         entrypoint: "index.html",
-        artifacts: [{ path: "assets/index.js", body: "console.log('ok')" }],
+        artifacts: [
+          { path: "assets/index.js", bodyBase64: "Y29uc29sZS5sb2coJ29rJyk=" },
+        ],
       }),
     ).rejects.toMatchObject({
       code: "invalid_content_build_payload",
@@ -226,8 +243,11 @@ describe("center-worker storage contract", () => {
         revision: "revision-3",
         entrypoint: "index.html",
         artifacts: [
-          { path: "index.html", body: "<main>first</main>" },
-          { path: "index.html", body: "<main>second</main>" },
+          { path: "index.html", bodyBase64: "PG1haW4+Zmlyc3Q8L21haW4+" },
+          {
+            path: "index.html",
+            bodyBase64: "PG1haW4+c2Vjb25kPC9tYWluPg==",
+          },
         ],
       }),
     ).rejects.toMatchObject({
@@ -295,7 +315,7 @@ describe("center-worker storage contract", () => {
       store.writeContentBuildArtifacts({
         revision: "revision-1",
         entrypoint: "index.html",
-        artifacts: [{ path: "assets\\logo.svg", body: "<svg></svg>" }],
+        artifacts: [{ path: "assets\\logo.svg", bodyBase64: "PHN2Zz48L3N2Zz4=" }],
       }),
     ).rejects.toMatchObject({
       code: "invalid_object_path",
