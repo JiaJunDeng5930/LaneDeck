@@ -65,6 +65,23 @@ fn constructor_rejects_non_positive_frame_limits() {
 }
 
 #[test]
+fn constructor_rejects_frame_seconds_outside_supported_duration_range() {
+    let result = LaneEngine::new(
+        script_lane_config(2, i64::MAX),
+        StoreProbe::new(empty_history()),
+        RunnerProbe::scripted(Vec::new()),
+    );
+    let error = match result {
+        Ok(_) => panic!("expected invalid frame max seconds"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+
+    assert!(message.contains("rawStage.settings.frame.maxSeconds"));
+    assert!(message.contains("supported duration"));
+}
+
+#[test]
 fn time_trigger_closes_empty_raw_frame_and_runs_downstream_stages() {
     let opened_at = instant(1_700_001_000);
     let deadline = opened_at + contract_helpers::seconds(60);

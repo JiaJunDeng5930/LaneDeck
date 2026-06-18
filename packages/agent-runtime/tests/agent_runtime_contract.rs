@@ -4,6 +4,7 @@ use lanedeck_agent_runtime::{
     AgentConfig, AgentError, AgentService, ControlMessage, ControlReply, ScriptPurpose,
     ScriptRunOutput, ScriptSideEffectPolicy, SpoolEntryId,
 };
+use lanedeck_protocol::{LaneConfig, StageMode};
 use serde_json::json;
 
 use contract_helpers::{
@@ -321,6 +322,7 @@ async fn validation_ack_marks_entries_rejected_and_removed() {
     assert!(spool.pending_entries().is_empty());
     assert_eq!(report.uploaded_batch_count, 1);
     assert_eq!(report.rejected_entry_count, 1);
+    assert_eq!(report.diagnostics[0].path, "frames[0]");
 }
 
 #[tokio::test]
@@ -606,6 +608,20 @@ fn startup_rejects_schedule_interval_seconds_above_signed_duration_limit() {
 }
 
 #[test]
+fn startup_rejects_schedule_interval_seconds_outside_supported_duration_range() {
+    let mut config = script_lane_agent_config();
+    config.lanes[0].schedule = lanedeck_agent_runtime::LaneSchedule {
+        interval_seconds: i64::MAX as u64,
+    };
+
+    let message = new_service_config_message(config);
+
+    assert!(message.contains("lane.cpu"));
+    assert!(message.contains("schedule.intervalSeconds"));
+    assert!(message.contains("supported duration"));
+}
+
+#[test]
 fn startup_rejects_zero_schedule_interval_seconds() {
     let message = new_service_config_message(script_lane_agent_config_with_interval(0));
 
@@ -662,6 +678,30 @@ async fn apply_local_change_control_message_calls_local_content_write_handler() 
         request.side_effect_policy,
         ScriptSideEffectPolicy::LocalContentWriteBoundary
     );
+}
+
+#[tokio::test]
+async fn apply_local_change_relative_single_file_uses_dot_cwd() {
+    let center = CenterProbe::accepting();
+    let spool = SpoolProbe::default();
+    let runner =
+        ScriptRunnerProbe::with_outputs(vec![successful_script_output(instant(1_700_014_600))]);
+    let mut service =
+        AgentService::new(script_lane_agent_config(), center, spool, runner.clone()).unwrap();
+
+    let reply = service
+        .handle_control_message(ControlMessage::apply_local_change(
+            "dashboard.json".into(),
+            json!({"title": "local dashboard"}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(reply, ControlReply::accepted("apply_local_change"));
+    let request = runner.requests().remove(0);
+    assert_eq!(request.purpose, ScriptPurpose::ApplyLocalChange);
+    assert_eq!(request.cwd, ".");
+    assert!(request.command.contains("dashboard.json"));
 }
 
 #[tokio::test]
@@ -1299,6 +1339,42 @@ async fn script_stage_capture_settings_require_boolean_at_update_boundary() {
 }
 
 #[tokio::test]
+async fn script_stage_timeout_seconds_outside_duration_range_rejected_at_update_boundary() {
+    for stage_path in ["rawStage", "metricStage", "eventStage"] {
+        let bad_lane = lane_with_script_timeout(stage_path, i64::MAX);
+        let new_message =
+            new_service_config_message(agent_config_with_lane_config(bad_lane.clone()));
+        assert_duration_config_message(&new_message, stage_path);
+
+        let now = instant(1_700_017_650);
+        let spool = SpoolProbe::default();
+        let runner = ScriptRunnerProbe::with_outputs(vec![successful_script_output(now)]);
+        let mut service = AgentService::new(
+            script_lane_agent_config(),
+            CenterProbe::accepting(),
+            spool.clone(),
+            runner.clone(),
+        )
+        .unwrap();
+
+        let reload_error = service
+            .handle_control_message(ControlMessage::reload_lane_config(bad_lane))
+            .await
+            .unwrap_err();
+        let reload_message = config_message(reload_error);
+        assert_duration_config_message(&reload_message, stage_path);
+
+        let report = service.run_once(now).await.unwrap();
+        let requests = runner.requests();
+
+        assert_eq!(report.lane_execution_count, 1, "{stage_path}");
+        assert_eq!(requests.len(), 1, "{stage_path}");
+        assert_eq!(requests[0].purpose, ScriptPurpose::CollectSource);
+        assert_eq!(spool.enqueued_batches()[0].frames[0].lane_id, "lane.cpu");
+    }
+}
+
+#[tokio::test]
 async fn downstream_builtin_stages_are_rejected_at_update_boundary() {
     for (case_name, bad_lane, stage_path) in downstream_builtin_stage_cases() {
         let new_message =
@@ -1380,6 +1456,46 @@ fn assert_stage_setting_config_message(
     assert!(message.contains("lane.cpu"), "{case_name}: {message}");
     assert!(message.contains(stage_path), "{case_name}: {message}");
     assert!(message.contains(setting_key), "{case_name}: {message}");
+}
+
+fn assert_duration_config_message(message: &str, stage_path: &str) {
+    assert!(message.contains("lane.cpu"), "{stage_path}: {message}");
+    assert!(message.contains(stage_path), "{stage_path}: {message}");
+    assert!(
+        message.contains("timeoutSeconds"),
+        "{stage_path}: {message}"
+    );
+    assert!(
+        message.contains("supported duration"),
+        "{stage_path}: {message}"
+    );
+}
+
+fn lane_with_script_timeout(stage_path: &str, timeout_seconds: i64) -> LaneConfig {
+    let mut config = scripted_metric_agent_config();
+    let lane = &mut config.lanes[0].config;
+
+    match stage_path {
+        "rawStage" => {
+            lane.raw_stage.settings["timeoutSeconds"] = json!(timeout_seconds);
+        }
+        "metricStage" => {
+            lane.metric_stage.settings["timeoutSeconds"] = json!(timeout_seconds);
+        }
+        "eventStage" => {
+            lane.event_stage.mode = StageMode::Script;
+            lane.event_stage.settings = json!({
+                "command": "event-cpu",
+                "cwd": "/var/lib/lanedeck/stages/event",
+                "timeoutSeconds": timeout_seconds,
+                "captureStdout": true,
+                "captureStderr": true
+            });
+        }
+        _ => unreachable!("known script stage path"),
+    }
+
+    config.lanes.remove(0).config
 }
 
 fn metric_stage_inputs(runner: &ScriptRunnerProbe) -> Vec<serde_json::Value> {
