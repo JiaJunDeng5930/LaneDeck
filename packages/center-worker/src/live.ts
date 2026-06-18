@@ -1,4 +1,4 @@
-import type { JsonObject } from "@lanedeck/protocol";
+import type { AgentControlMessage, JsonObject } from "@lanedeck/protocol";
 
 export interface LiveSocket {
   send(message: string): void;
@@ -30,14 +30,6 @@ export type BrowserLiveMessage =
       workspaceId: string;
       state: JsonObject;
     };
-
-export type AgentControlMessage = {
-  type: "build_content";
-  workspaceId: string;
-  mutationId: string;
-  buildRequestId: string;
-  payload: JsonObject;
-};
 
 export class LiveHub {
   private readonly agents = new Set<LiveSocket>();

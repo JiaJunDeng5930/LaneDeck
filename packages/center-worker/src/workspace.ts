@@ -1,8 +1,11 @@
+import { parseLaneConfig } from "@lanedeck/protocol";
 import type {
+  Diagnostic,
   IngestAck,
   IngestBatch,
   JsonObject,
   JsonValue,
+  LaneConfig,
   MutationRequest,
   MutationResult,
   QueryRequest,
@@ -32,8 +35,13 @@ interface PatchContentPayload {
 }
 
 interface PatchLaneConfigPayload {
-  laneId: string;
-  settings: JsonObject;
+  config: LaneConfig;
+}
+
+interface LocalBuildPayload {
+  contentId: string;
+  cwd: string;
+  command: string;
 }
 
 export class WorkspaceService {
@@ -101,8 +109,9 @@ export class WorkspaceService {
       return await this.patchLaneConfig(request, mutationId, payload);
     }
 
+    const payload = readLocalBuildPayload(request.payload);
     await this.options.storage.saveMutation(request, mutationId);
-    return await this.requestLocalBuild(request, mutationId);
+    return await this.requestLocalBuild(mutationId, payload);
   }
 
   async alarm(workspaceId: string): Promise<void> {
@@ -165,43 +174,49 @@ export class WorkspaceService {
     await this.options.storage.saveLaneRevision({
       workspaceId: request.workspaceId,
       mutationId,
-      laneId: payload.laneId,
+      laneId: payload.config.laneId,
       revision: laneRevision,
-      settings: payload.settings,
+      settings: jsonObjectFromLaneConfig(payload.config),
       createdAt: this.clock(),
     });
     this.options.live.broadcastToBrowsers({
       type: "lane_settings_changed",
       workspaceId: request.workspaceId,
       mutationId,
-      laneId: payload.laneId,
+      laneId: payload.config.laneId,
       laneRevision,
+    });
+    const controlMessageId = this.idGenerator();
+    const delivered = this.options.live.sendToAgents({
+      type: "reload_lane_config",
+      messageId: controlMessageId,
+      config: payload.config,
     });
     return {
       mutation: "patch_lane_config",
       mutationId,
       laneRevision,
-      diagnostics: [],
+      diagnostics: deliveryDiagnostics(delivered, "reload_lane_config"),
     };
   }
 
   private async requestLocalBuild(
-    request: MutationRequest,
     mutationId: string,
+    payload: LocalBuildPayload,
   ): Promise<MutationResult> {
     const buildRequestId = this.idGenerator();
-    this.options.live.sendToAgents({
+    const delivered = this.options.live.sendToAgents({
       type: "build_content",
-      workspaceId: request.workspaceId,
-      mutationId,
-      buildRequestId,
-      payload: request.payload,
+      messageId: buildRequestId,
+      contentId: payload.contentId,
+      cwd: payload.cwd,
+      command: payload.command,
     });
     return {
       mutation: "request_local_build",
       mutationId,
       buildRequestId,
-      diagnostics: [],
+      diagnostics: deliveryDiagnostics(delivered, "build_content"),
     };
   }
 }
@@ -225,7 +240,10 @@ export function validateMutationRequestPayload(request: MutationRequest): void {
 
   if (request.mutation === "patch_lane_config") {
     readPatchLaneConfigPayload(request.payload);
+    return;
   }
+
+  readLocalBuildPayload(request.payload);
 }
 
 function readPatchContentPayload(payload: JsonObject): PatchContentPayload {
@@ -249,9 +267,36 @@ function readPatchLaneConfigPayload(
   payload: JsonObject,
 ): PatchLaneConfigPayload {
   return {
-    laneId: requiredString(payload, "laneId"),
-    settings: requiredJsonObject(payload, "settings"),
+    config: parseLaneConfig(requiredJsonObject(payload, "config")),
   };
+}
+
+function readLocalBuildPayload(payload: JsonObject): LocalBuildPayload {
+  return {
+    contentId: requiredString(payload, "contentId"),
+    cwd: requiredString(payload, "cwd"),
+    command: requiredString(payload, "command"),
+  };
+}
+
+function deliveryDiagnostics(
+  delivered: number,
+  messageType: string,
+): Diagnostic[] {
+  if (delivered > 0) {
+    return [];
+  }
+
+  return [
+    {
+      path: "agents",
+      message: `no connected agent accepted ${messageType}`,
+    },
+  ];
+}
+
+function jsonObjectFromLaneConfig(config: LaneConfig): JsonObject {
+  return config as unknown as JsonObject;
 }
 
 function requiredString(payload: JsonObject, key: string): string {

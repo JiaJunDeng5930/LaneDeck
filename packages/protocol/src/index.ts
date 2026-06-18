@@ -133,6 +133,30 @@ export type ShellContentMessage =
       payload: { height: number };
     };
 
+export type AgentControlMessage =
+  | {
+      type: "reload_lane_config";
+      messageId: string;
+      config: LaneConfig;
+    }
+  | {
+      type: "build_content";
+      messageId: string;
+      contentId: string;
+      cwd: string;
+      command: string;
+    }
+  | {
+      type: "apply_local_change";
+      messageId: string;
+      path: string;
+      body: JsonValue;
+    }
+  | {
+      type: "heartbeat";
+      messageId: string;
+    };
+
 export class ProtocolError extends Error {
   constructor(readonly diagnostics: Diagnostic[]) {
     super("protocol validation failed");
@@ -141,14 +165,7 @@ export class ProtocolError extends Error {
 
 export function parseLaneConfig(input: unknown): LaneConfig {
   const validator = new Validator();
-  const object = validator.object(input, "$");
-  const lane: LaneConfig = {
-    laneId: validator.string(object.laneId, "laneId"),
-    displayName: validator.string(object.displayName, "displayName"),
-    rawStage: parseStageConfig(object.rawStage, "rawStage", validator),
-    metricStage: parseStageConfig(object.metricStage, "metricStage", validator),
-    eventStage: parseStageConfig(object.eventStage, "eventStage", validator),
-  };
+  const lane = parseLaneConfigWithValidator(input, "$", validator);
   validator.finish();
   return lane;
 }
@@ -260,6 +277,92 @@ export function parseShellContentMessage(input: unknown): ShellContentMessage {
   );
   validator.finish();
   throw new Error("unreachable");
+}
+
+export function parseAgentControlMessage(input: unknown): AgentControlMessage {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const type = validator.string(object.type, "type");
+  const messageId = validator.string(object.messageId, "messageId");
+
+  if (type === "reload_lane_config") {
+    const message: AgentControlMessage = {
+      type,
+      messageId,
+      config: parseLaneConfigWithValidator(object.config, "config", validator),
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "build_content") {
+    const message: AgentControlMessage = {
+      type,
+      messageId,
+      contentId: validator.string(object.contentId, "contentId"),
+      cwd: validator.string(object.cwd, "cwd"),
+      command: validator.string(object.command, "command"),
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "apply_local_change") {
+    const message: AgentControlMessage = {
+      type,
+      messageId,
+      path: validator.string(object.path, "path"),
+      body: validator.jsonValue(object.body, "body"),
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "heartbeat") {
+    const message: AgentControlMessage = {
+      type,
+      messageId,
+    };
+    validator.finish();
+    return message;
+  }
+
+  validator.add(
+    "type",
+    "expected reload_lane_config, build_content, apply_local_change, or heartbeat",
+  );
+  validator.finish();
+  throw new Error("unreachable");
+}
+
+function parseLaneConfigWithValidator(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): LaneConfig {
+  const object = validator.object(input, path);
+  return {
+    laneId: validator.string(object.laneId, joinPath(path, "laneId")),
+    displayName: validator.string(
+      object.displayName,
+      joinPath(path, "displayName"),
+    ),
+    rawStage: parseStageConfig(
+      object.rawStage,
+      joinPath(path, "rawStage"),
+      validator,
+    ),
+    metricStage: parseStageConfig(
+      object.metricStage,
+      joinPath(path, "metricStage"),
+      validator,
+    ),
+    eventStage: parseStageConfig(
+      object.eventStage,
+      joinPath(path, "eventStage"),
+      validator,
+    ),
+  };
 }
 
 function parseStageConfig(
