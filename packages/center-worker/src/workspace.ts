@@ -430,6 +430,11 @@ export class WorkspaceService {
           path: "buildRequestId",
           message: "content build request already completed",
         },
+        ...supersededDiagnostics(
+          (await this.options.storage.getCurrentContent(request.workspaceId))
+            ?.revision === record.revision,
+          "currentContent",
+        ),
       ],
     };
   }

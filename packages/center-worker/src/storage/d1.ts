@@ -214,6 +214,10 @@ export class D1CenterStorage implements CenterStorage {
       contentPath: promotion.contentPath,
       assetKey: promotion.assetKey,
     };
+    const latestContentSequence = await this.latestContentRevisionSequence(
+      promotion.workspaceId,
+    );
+    const promotesCurrent = existing.mutationSequence >= latestContentSequence;
 
     const statements = [
       this.db
@@ -228,14 +232,18 @@ export class D1CenterStorage implements CenterStorage {
           promotion.workspaceId,
           promotion.revision,
         ),
-      this.upsertPointer(
-        promotion.workspaceId,
-        "current_content_revision",
-        promotion.revision,
-        existing.mutationSequence,
-        promotion.promotedAt,
-      ),
     ];
+    if (promotesCurrent) {
+      statements.push(
+        this.upsertPointer(
+          promotion.workspaceId,
+          "current_content_revision",
+          promotion.revision,
+          existing.mutationSequence,
+          promotion.promotedAt,
+        ),
+      );
+    }
     if (promotion.buildRequestId !== undefined) {
       statements.push(
         this.db
@@ -255,11 +263,14 @@ export class D1CenterStorage implements CenterStorage {
     }
 
     await this.db.batch(statements);
-    return await this.pointerMatches(
-      promotion.workspaceId,
-      "current_content_revision",
-      promotion.revision,
-    ).then((isCurrent) => ({ record: promotedRecord, isCurrent }));
+    const isCurrent =
+      promotesCurrent &&
+      (await this.pointerMatches(
+        promotion.workspaceId,
+        "current_content_revision",
+        promotion.revision,
+      ));
+    return { record: promotedRecord, isCurrent };
   }
 
   async getCurrentContent(
@@ -397,6 +408,20 @@ export class D1CenterStorage implements CenterStorage {
       .first<ContentRevisionRow>();
 
     return row === null ? null : contentRevisionFromRow(row);
+  }
+
+  private async latestContentRevisionSequence(
+    workspaceId: string,
+  ): Promise<number> {
+    const latest = await this.db
+      .prepare(
+        `SELECT MAX(mutation_sequence) AS latest_sequence
+        FROM content_revisions
+        WHERE workspace_id = ?`,
+      )
+      .bind(workspaceId)
+      .first<number>("latest_sequence");
+    return latest ?? 0;
   }
 
   async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {

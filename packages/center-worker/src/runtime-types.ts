@@ -36,7 +36,8 @@ export interface WorkspaceCoordinatorRpc {
 }
 
 export interface WorkspaceCoordinatorNamespace {
-  getByName(workspaceId: string): WorkspaceCoordinatorRpc;
+  idFromName(workspaceId: string): DurableObjectId;
+  get(id: DurableObjectId): WorkspaceCoordinatorRpc;
 }
 
 export interface CenterWorkerEnv {

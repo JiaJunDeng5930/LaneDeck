@@ -58,6 +58,103 @@ describe("center-worker storage contract", () => {
     );
   });
 
+  it("keeps older completed content historical while a newer source revision is pending", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-old", 1, "2026-06-10T10:00:01.000Z"),
+    );
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-new", 2, "2026-06-10T10:00:02.000Z"),
+    );
+    await storage.saveContentBuildRequest(
+      contentBuildRequest("build-old", "revision-old"),
+    );
+    await storage.saveContentBuildRequest(
+      contentBuildRequest("build-new", "revision-new"),
+    );
+
+    await storage.claimContentBuildRequest("workspace.local", "build-old");
+    const oldCompletion = await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-old",
+      contentPath: "index.html",
+      assetKey: "content/revision-old/index.html",
+      promotedAt: "2026-06-10T10:00:03.000Z",
+      buildRequestId: "build-old",
+    });
+
+    expect(oldCompletion.isCurrent).toBe(false);
+    await expect(storage.getCurrentContent("workspace.local")).resolves.toBe(
+      null,
+    );
+    await expect(
+      storage.getContentBuildRequest("workspace.local", "build-old"),
+    ).resolves.toMatchObject({
+      status: "completed",
+      completedAt: "2026-06-10T10:00:03.000Z",
+    });
+
+    await storage.claimContentBuildRequest("workspace.local", "build-new");
+    const newCompletion = await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-new",
+      contentPath: "index.html",
+      assetKey: "content/revision-new/index.html",
+      promotedAt: "2026-06-10T10:00:04.000Z",
+      buildRequestId: "build-new",
+    });
+
+    expect(newCompletion.isCurrent).toBe(true);
+    await expect(storage.getCurrentContent("workspace.local")).resolves.toEqual(
+      expect.objectContaining({ revision: "revision-new" }),
+    );
+  });
+
+  it("keeps the previous current content while newer source and older completion are pending", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-older", 1, "2026-06-10T10:00:01.000Z"),
+    );
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-current", 2, "2026-06-10T10:00:02.000Z"),
+    );
+    await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-current",
+      contentPath: "index.html",
+      assetKey: "content/revision-current/index.html",
+      promotedAt: "2026-06-10T10:00:03.000Z",
+    });
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-pending", 3, "2026-06-10T10:00:04.000Z"),
+    );
+    await storage.saveContentBuildRequest(
+      contentBuildRequest("build-older", "revision-older"),
+    );
+
+    await storage.claimContentBuildRequest("workspace.local", "build-older");
+    const completion = await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-older",
+      contentPath: "index.html",
+      assetKey: "content/revision-older/index.html",
+      promotedAt: "2026-06-10T10:00:05.000Z",
+      buildRequestId: "build-older",
+    });
+
+    expect(completion.isCurrent).toBe(false);
+    await expect(storage.getCurrentContent("workspace.local")).resolves.toEqual(
+      expect.objectContaining({ revision: "revision-current" }),
+    );
+    await expect(
+      storage.getContentBuildRequest("workspace.local", "build-older"),
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("keeps current lane pointer on the newest mutation sequence", async () => {
     const db = new FakeD1Database();
     const storage = new D1CenterStorage(db as unknown as D1Database);
@@ -531,6 +628,7 @@ function laneRevision(
 
 function contentBuildRequest(
   buildRequestId: string,
+  contentRevision = "revision-1",
 ): ContentBuildRequestRecord {
   return {
     workspaceId: "workspace.local",
@@ -538,7 +636,7 @@ function contentBuildRequest(
     mutationId: "mutation-build",
     machineId: "machine.local",
     contentId: "content.home",
-    contentRevision: "revision-1",
+    contentRevision,
     cwd: "/workspace/content",
     command: "corepack pnpm --filter @lanedeck/content build",
     createdAt: "2026-06-10T10:00:00.000Z",
@@ -875,6 +973,17 @@ class FakeD1Database {
               updated_at: row.updatedAt,
             }
       ) as T;
+    }
+
+    if (
+      sql.includes("MAX(mutation_sequence)") &&
+      sql.includes("FROM content_revisions")
+    ) {
+      const [workspaceId] = bindings as string[];
+      const sequences = [...this.contentRevisions.values()]
+        .filter((row) => row.workspace_id === workspaceId)
+        .map((row) => row.mutation_sequence);
+      return (sequences.length === 0 ? null : Math.max(...sequences)) as T;
     }
 
     if (sql.includes("FROM content_revisions")) {

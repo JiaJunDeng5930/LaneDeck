@@ -207,7 +207,9 @@ function decodeContentPathSegment(segment: string): string {
 }
 
 function workspace(env: CenterWorkerEnv, workspaceId: string) {
-  return env.WORKSPACE_COORDINATOR.getByName(workspaceId);
+  return env.WORKSPACE_COORDINATOR.get(
+    env.WORKSPACE_COORDINATOR.idFromName(workspaceId),
+  );
 }
 
 function unwrapWorkspaceRpcResult<T>(result: WorkspaceRpcResult<T>): T {

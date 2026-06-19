@@ -24,6 +24,10 @@ import type {
   LaneConfig,
   MutationRequest,
 } from "@lanedeck/protocol";
+import type {
+  WorkspaceCoordinatorNamespace,
+  WorkspaceCoordinatorRpc,
+} from "../src/runtime-types";
 
 const validFrame = {
   laneId: "lane.local",
@@ -61,6 +65,31 @@ const validLaneConfig = {
 } satisfies LaneConfig;
 
 describe("center-worker contract", () => {
+  it("routes workspace requests through Durable Object namespace ids", async () => {
+    const harness = createHarness();
+    let fetchedId: string | undefined;
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/query",
+        {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: {},
+        },
+        "read-token",
+      ),
+      {
+        ...harness.env,
+        WORKSPACE_COORDINATOR: workspaceNamespace(harness.coordinator, (id) => {
+          fetchedId = id as unknown as string;
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchedId).toBe("durable:workspace.local");
+  });
+
   it("POST /api/ingest persists structured rows and returns ack", async () => {
     const harness = createHarness();
     const response = await handleRequest(
@@ -147,14 +176,12 @@ describe("center-worker contract", () => {
         "agent-token",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
@@ -313,14 +340,12 @@ describe("center-worker contract", () => {
         params: {},
       }),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
         LANEDECK_READ_TOKEN: "read-token",
@@ -422,14 +447,12 @@ describe("center-worker contract", () => {
         "ai-token",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
         LANEDECK_AGENT_TOKEN: "agent-token",
@@ -463,14 +486,12 @@ describe("center-worker contract", () => {
         "ai-token",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_AI_MUTATION_TOKEN: "ai-token",
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_READ_TOKEN: "read-token",
@@ -634,14 +655,12 @@ describe("center-worker contract", () => {
         },
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => ({
-            fetch: async (request: Request) => {
-              fetchedPath = new URL(request.url).pathname;
-              return new Response(null, { status: 204 });
-            },
-          }),
-        },
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          fetch: async (request: Request) => {
+            fetchedPath = new URL(request.url).pathname;
+            return new Response(null, { status: 204 });
+          },
+        }),
         LANEDECK_READ_TOKEN: "read-token",
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
@@ -663,14 +682,12 @@ describe("center-worker contract", () => {
         },
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => ({
-            fetch: async () => {
-              fetched = true;
-              return new Response(null, { status: 204 });
-            },
-          }),
-        },
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          fetch: async () => {
+            fetched = true;
+            return new Response(null, { status: 204 });
+          },
+        }),
         LANEDECK_READ_TOKEN: "read-token",
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
@@ -688,14 +705,12 @@ describe("center-worker contract", () => {
         "https://center.local/api/content/current?workspaceId=workspace.local",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_READ_TOKEN: "read-token",
         LANEDECK_DB: {},
         LANEDECK_BUCKET: {},
@@ -783,14 +798,12 @@ describe("center-worker contract", () => {
         headers: { upgrade: "websocket" },
       }),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => ({
-            fetch: async () => {
-              fetched = true;
-              return new Response(null, { status: 204 });
-            },
-          }),
-        },
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          fetch: async () => {
+            fetched = true;
+            return new Response(null, { status: 204 });
+          },
+        }),
         LANEDECK_AI_MUTATION_TOKEN: "ai-token",
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_DB: {},
@@ -813,14 +826,12 @@ describe("center-worker contract", () => {
         },
       }),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
             fetched = true;
-            return createHarness().env.WORKSPACE_COORDINATOR.getByName(
-              "workspace.local",
-            );
           },
-        },
+        ),
         LANEDECK_AI_MUTATION_TOKEN: "ai-token",
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_DB: {},
@@ -1076,12 +1087,12 @@ describe("center-worker contract", () => {
       const response = await handleRequest(
         jsonRequest("/api/content/build-complete", payload, "agent-token"),
         {
-          WORKSPACE_COORDINATOR: {
-            getByName: () => {
+          WORKSPACE_COORDINATOR: workspaceNamespace(
+            createHarness().coordinator,
+            () => {
               fetched = true;
-              return createHarness().coordinator("workspace.local");
             },
-          },
+          ),
           LANEDECK_AI_MUTATION_TOKEN: "ai-token",
           LANEDECK_AGENT_TOKEN: "agent-token",
           LANEDECK_READ_TOKEN: "read-token",
@@ -1117,23 +1128,21 @@ describe("center-worker contract", () => {
         "agent-token",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => ({
-            buildComplete: async () => ({
-              ok: false,
-              error: {
-                status: 400,
-                code: "invalid_content_build_completion",
-                diagnostics: [
-                  {
-                    path: "buildRequestId",
-                    message: "expected existing content build request",
-                  },
-                ],
-              },
-            }),
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          buildComplete: async () => ({
+            ok: false,
+            error: {
+              status: 400,
+              code: "invalid_content_build_completion",
+              diagnostics: [
+                {
+                  path: "buildRequestId",
+                  message: "expected existing content build request",
+                },
+              ],
+            },
           }),
-        },
+        }),
         LANEDECK_AI_MUTATION_TOKEN: "ai-token",
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_READ_TOKEN: "read-token",
@@ -1167,23 +1176,21 @@ describe("center-worker contract", () => {
         "ai-token",
       ),
       {
-        WORKSPACE_COORDINATOR: {
-          getByName: () => ({
-            mutate: async () => ({
-              ok: false,
-              error: {
-                status: 400,
-                code: "invalid_mutation_payload",
-                diagnostics: [
-                  {
-                    path: "payload.contentRevision",
-                    message: "expected existing content revision",
-                  },
-                ],
-              },
-            }),
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          mutate: async () => ({
+            ok: false,
+            error: {
+              status: 400,
+              code: "invalid_mutation_payload",
+              diagnostics: [
+                {
+                  path: "payload.contentRevision",
+                  message: "expected existing content revision",
+                },
+              ],
+            },
           }),
-        },
+        }),
         LANEDECK_AI_MUTATION_TOKEN: "ai-token",
         LANEDECK_AGENT_TOKEN: "agent-token",
         LANEDECK_READ_TOKEN: "read-token",
@@ -1201,8 +1208,8 @@ describe("center-worker contract", () => {
     });
   });
 
-  it("historical content build completion skips live broadcast and reports current diagnostic", async () => {
-    const harness = createHarness(new SupersededStorage());
+  it("older content build completion stays historical after a newer source revision is pending", async () => {
+    const harness = createHarness();
     const browser = new RecordingSocket();
     harness.live.addBrowser(browser);
 
@@ -1211,7 +1218,7 @@ describe("center-worker contract", () => {
       mutation: "patch_content",
       payload: {
         path: "index.html",
-        source: "<main>historical</main>",
+        source: "<main>old</main>",
       },
     });
     await harness.workspace.mutate({
@@ -1223,6 +1230,14 @@ describe("center-worker contract", () => {
         contentRevision: "id-2",
         cwd: "/workspace/content",
         command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>new</main>",
       },
     });
 
@@ -1259,6 +1274,92 @@ describe("center-worker contract", () => {
     });
 
     expect(browser.decodedMessages()).toEqual([]);
+    await expect(
+      harness.storage.getCurrentContent("workspace.local"),
+    ).resolves.toBeNull();
+    await expect(
+      harness.storage.getContentBuildRequest("workspace.local", "id-4"),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(harness.objects.buildArtifactWriteCount).toBe(1);
+    expect(harness.objects.writes.get("content/id-2/index.html")).toBe(
+      "<main>built</main>",
+    );
+  });
+
+  it("stale completed content build replay preserves current diagnostics without side effects", async () => {
+    const harness = createHarness();
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>old</main>",
+      },
+    });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: {
+        machineId: "machine.local",
+        contentId: "content.home",
+        contentRevision: "id-2",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>new</main>",
+      },
+    });
+    const payload = {
+      workspaceId: "workspace.local",
+      machineId: "machine.local",
+      buildRequestId: "id-4",
+      contentId: "content.home",
+      contentRevision: "id-2",
+      entrypoint: "index.html",
+      artifacts: [
+        { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+      ],
+    };
+
+    const first = await handleRequest(
+      jsonRequest("/api/content/build-complete", payload, "agent-token"),
+      harness.env,
+    );
+    const firstWriteCount = harness.objects.buildArtifactWriteCount;
+    const firstMessages = browser.decodedMessages();
+    const second = await handleRequest(
+      jsonRequest("/api/content/build-complete", payload, "agent-token"),
+      harness.env,
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({
+      mutation: "patch_content",
+      mutationId: "id-1",
+      contentRevision: "id-2",
+      diagnostics: [
+        {
+          path: "buildRequestId",
+          message: "content build request already completed",
+        },
+        {
+          path: "currentContent",
+          message: "superseded by newer mutation sequence",
+        },
+      ],
+    });
+    expect(harness.objects.buildArtifactWriteCount).toBe(firstWriteCount);
+    expect(browser.decodedMessages()).toEqual(firstMessages);
   });
 
   it("POST /api/content/build-complete rejects missing source revision before artifact writes", async () => {
@@ -1781,54 +1882,53 @@ function createHarness(
     clock: () => "2026-06-10T10:00:00.000Z",
     idGenerator: () => `id-${(nextId += 1).toString()}`,
   });
-  const env = {
-    WORKSPACE_COORDINATOR: {
-      getByName: () => ({
-        ...workspace,
-        ingest: (batch: IngestBatch) => workspace.ingest(batch),
-        query: (request: Parameters<WorkspaceService["query"]>[0]) =>
-          workspace.query(request),
-        mutate: async (request: Parameters<WorkspaceService["mutate"]>[0]) => {
-          try {
-            return { ok: true, value: await workspace.mutate(request) };
-          } catch (error) {
-            if (error instanceof ApiError) {
-              return {
-                ok: false,
-                error: {
-                  status: error.status,
-                  code: error.code,
-                  diagnostics: error.diagnostics,
-                },
-              };
-            }
-            throw error;
-          }
-        },
-        buildComplete: async (
-          request: Parameters<WorkspaceService["buildComplete"]>[0],
-        ) => {
-          try {
-            return { ok: true, value: await workspace.buildComplete(request) };
-          } catch (error) {
-            if (error instanceof ApiError) {
-              return {
-                ok: false,
-                error: {
-                  status: error.status,
-                  code: error.code,
-                  diagnostics: error.diagnostics,
-                },
-              };
-            }
-            throw error;
-          }
-        },
-        connectAgent: async () => new Response(null, { status: 204 }),
-        connectBrowser: async () => new Response(null, { status: 204 }),
-        fetch: async () => new Response(null, { status: 204 }),
-      }),
+  const coordinator: WorkspaceCoordinatorRpc = {
+    ...workspace,
+    ingest: (batch: IngestBatch) => workspace.ingest(batch),
+    query: (request: Parameters<WorkspaceService["query"]>[0]) =>
+      workspace.query(request),
+    mutate: async (request: Parameters<WorkspaceService["mutate"]>[0]) => {
+      try {
+        return { ok: true, value: await workspace.mutate(request) };
+      } catch (error) {
+        if (error instanceof ApiError) {
+          return {
+            ok: false,
+            error: {
+              status: error.status,
+              code: error.code,
+              diagnostics: error.diagnostics,
+            },
+          };
+        }
+        throw error;
+      }
     },
+    buildComplete: async (
+      request: Parameters<WorkspaceService["buildComplete"]>[0],
+    ) => {
+      try {
+        return { ok: true, value: await workspace.buildComplete(request) };
+      } catch (error) {
+        if (error instanceof ApiError) {
+          return {
+            ok: false,
+            error: {
+              status: error.status,
+              code: error.code,
+              diagnostics: error.diagnostics,
+            },
+          };
+        }
+        throw error;
+      }
+    },
+    connectAgent: async () => new Response(null, { status: 204 }),
+    connectBrowser: async () => new Response(null, { status: 204 }),
+    fetch: async () => new Response(null, { status: 204 }),
+  };
+  const env = {
+    WORKSPACE_COORDINATOR: workspaceNamespace(coordinator),
     LANEDECK_DB: {},
     LANEDECK_BUCKET: {},
     LANEDECK_AI_MUTATION_TOKEN: "ai-token",
@@ -1836,7 +1936,21 @@ function createHarness(
     LANEDECK_READ_TOKEN: "read-token",
   };
 
-  return { storage, objects, live, workspace, env };
+  return { storage, objects, live, workspace, coordinator, env };
+}
+
+function workspaceNamespace(
+  coordinator: Partial<WorkspaceCoordinatorRpc>,
+  onGet?: (id: DurableObjectId) => void,
+): WorkspaceCoordinatorNamespace {
+  return {
+    idFromName: (workspaceId: string) =>
+      `durable:${workspaceId}` as unknown as DurableObjectId,
+    get: (id: DurableObjectId) => {
+      onGet?.(id);
+      return coordinator as WorkspaceCoordinatorRpc;
+    },
+  };
 }
 
 function jsonRequest(path: string, body: JsonObject, token?: string): Request {
@@ -2066,8 +2180,14 @@ class MemoryCenterStorage implements CenterStorage {
         }
       }
     }
-    this.currentContentRevision = record.revision;
-    return { record, isCurrent: true };
+    const latestContentSequence = this.latestContentRevisionSequence(
+      promotion.workspaceId,
+    );
+    const isCurrent = record.mutationSequence >= latestContentSequence;
+    if (isCurrent) {
+      this.currentContentRevision = record.revision;
+    }
+    return { record, isCurrent };
   }
 
   async getCurrentContent(
@@ -2175,6 +2295,16 @@ class MemoryCenterStorage implements CenterStorage {
     this.mutationSequence += 1;
     this.mutations.push(request);
     return this.mutationSequence;
+  }
+
+  private latestContentRevisionSequence(workspaceId: string): number {
+    return this.contentRevisions.reduce(
+      (latest, record) =>
+        record.workspaceId === workspaceId
+          ? Math.max(latest, record.mutationSequence)
+          : latest,
+      0,
+    );
   }
 }
 
