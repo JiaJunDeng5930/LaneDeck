@@ -37,6 +37,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
   let currentRoute: ContentRoute | undefined;
   let pendingRoute: ContentRoute | undefined;
   let retryRouteAfterFailure: ContentRoute | undefined;
+  let failedRoute: ContentRoute | undefined;
   let disposed = false;
 
   const pickSubscription = subscribePickTargets((target) => {
@@ -93,6 +94,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         currentRoute = route;
         pendingRoute = undefined;
         retryRouteAfterFailure = undefined;
+        failedRoute = undefined;
         await reportHeight();
       } catch (error) {
         if (sequence !== renderSequence || disposed) {
@@ -107,6 +109,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
           return;
         }
 
+        failedRoute = route;
         renderError("content render failed", error);
         await reportHeight();
         await reportError("content render failed", error);
@@ -120,9 +123,15 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         pendingRoute !== undefined &&
         sameContentRoute(pendingRoute, nextRoute) &&
         hasQueryAccessPatch(state);
+      const shouldRetryFailedRoute =
+        nextRoute !== undefined &&
+        failedRoute !== undefined &&
+        sameContentRoute(failedRoute, nextRoute) &&
+        hasQueryAccessPatch(state);
       const shouldRender =
         nextRoute !== undefined &&
-        !sameContentRoute(pendingRoute ?? currentRoute, nextRoute);
+        (shouldRetryFailedRoute ||
+          !sameContentRoute(pendingRoute ?? currentRoute, nextRoute));
       applyHostState(state);
       if (shouldRetryPendingRoute) {
         retryRouteAfterFailure = nextRoute;

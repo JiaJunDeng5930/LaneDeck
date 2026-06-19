@@ -410,17 +410,29 @@ function postFrameMessage(
     const tokenFreeMessage = wildcardBootstrapMessage(message);
     for (const targetOrigin of uniqueOrigins(policy.tokenFreeTargetOrigins)) {
       if (!policy.strictTargetOrigins.includes(targetOrigin)) {
-        contentWindow.postMessage(tokenFreeMessage, targetOrigin);
+        safelyPostMessage(contentWindow, tokenFreeMessage, targetOrigin);
       }
     }
     for (const targetOrigin of uniqueOrigins(policy.strictTargetOrigins)) {
-      contentWindow.postMessage(message, targetOrigin);
+      safelyPostMessage(contentWindow, message, targetOrigin);
     }
     return;
   }
 
   for (const targetOrigin of uniqueOrigins(policy.tokenFreeTargetOrigins)) {
+    safelyPostMessage(contentWindow, message, targetOrigin);
+  }
+}
+
+function safelyPostMessage(
+  contentWindow: Window,
+  message: ShellToContentMessage,
+  targetOrigin: string,
+): void {
+  try {
     contentWindow.postMessage(message, targetOrigin);
+  } catch {
+    return;
   }
 }
 
