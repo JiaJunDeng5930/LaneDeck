@@ -19,12 +19,46 @@ const workspaceId =
   import.meta.env.VITE_LANEDECK_WORKSPACE_ID ?? "workspace.local";
 const readToken = import.meta.env.VITE_LANEDECK_READ_TOKEN ?? "";
 
+export interface ShellViewReadiness {
+  contentReady: boolean;
+  liveReady: boolean;
+  startupSettled: boolean;
+}
+
+export function shellVisibleStatusForReadiness(
+  readiness: ShellViewReadiness,
+): "Ready" | "Content error" | undefined {
+  if (
+    readiness.startupSettled &&
+    readiness.contentReady &&
+    readiness.liveReady
+  ) {
+    return "Ready";
+  }
+  if (readiness.startupSettled && !readiness.contentReady) {
+    return "Content error";
+  }
+  return undefined;
+}
+
 export function ShellView() {
   const appRef = useRef<ShellApp | undefined>(undefined);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const readinessRef = useRef({
+    contentReady: false,
+    liveReady: false,
+    startupSettled: false,
+  });
   const [iframe, setIframe] = useState<HTMLIFrameElement | null>(null);
   const [status, setStatus] = useState("Starting");
   const [pickerEnabled, setPickerEnabled] = useState(false);
+
+  const updateStatusFromReadiness = () => {
+    const nextStatus = shellVisibleStatusForReadiness(readinessRef.current);
+    if (nextStatus !== undefined) {
+      setStatus(nextStatus);
+    }
+  };
 
   useEffect(() => {
     if (iframe === null) {
@@ -41,8 +75,17 @@ export function ShellView() {
       url: centerLiveUrl(centerBaseUrl, workspaceId, readToken),
     });
     const contentLoader = createIframeContentLoader(createIframeHost(iframe));
-    let startupSettled = false;
-    let contentReady = false;
+    readinessRef.current = {
+      contentReady: false,
+      liveReady: false,
+      startupSettled: false,
+    };
+    const updateStatus = () => {
+      if (!mounted) {
+        return;
+      }
+      updateStatusFromReadiness();
+    };
     const app = createShellApp({
       center,
       live,
@@ -52,14 +95,16 @@ export function ShellView() {
         if (!mounted) {
           return;
         }
-        contentReady = session.status === "ready";
-        if (contentReady && startupSettled) {
-          setStatus("Ready");
+        readinessRef.current.contentReady = session.status === "ready";
+        if (!readinessRef.current.contentReady) {
+          setStatus("Content error");
           return;
         }
-        if (!contentReady) {
-          setStatus("Content error");
-        }
+        updateStatus();
+      },
+      onLiveConnectionChange(connected) {
+        readinessRef.current.liveReady = connected;
+        updateStatus();
       },
       onPickerModeChange(enabled) {
         if (mounted) {
@@ -73,10 +118,8 @@ export function ShellView() {
     void app
       .start()
       .then(() => {
-        startupSettled = true;
-        if (mounted) {
-          setStatus(contentReady ? "Ready" : "Content error");
-        }
+        readinessRef.current.startupSettled = true;
+        updateStatus();
       })
       .catch((error: unknown) => {
         if (mounted) {
@@ -112,7 +155,12 @@ export function ShellView() {
   const refreshContent = () => {
     setStatus("Refreshing");
     void appRef.current?.loadCurrentContent().then((session) => {
-      setStatus(session.status === "ready" ? "Ready" : "Content error");
+      readinessRef.current.contentReady = session.status === "ready";
+      if (readinessRef.current.contentReady) {
+        updateStatusFromReadiness();
+        return;
+      }
+      setStatus("Content error");
     });
   };
 

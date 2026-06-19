@@ -208,18 +208,17 @@ describe("shell app contract", () => {
     const content = new FakeContentLoader();
     const live = new DeferredLive();
     const liveChanges: boolean[] = [];
-    const deps: ShellDepsWithLiveConnectionChange = {
+    const app = createShellApp({
       center,
       live,
       contentLoader: content,
       clipboard: new FakeClipboard(),
       now: fixedNow,
       liveConnectTimeoutMs: 0,
-      onLiveConnectionChange: (connected: boolean) => {
+      onLiveConnectionChange(connected) {
         liveChanges.push(connected);
       },
-    };
-    const app = createShellApp(deps);
+    });
 
     await app.start();
 
@@ -579,12 +578,6 @@ describe("shell app contract", () => {
     ).resolves.toBeUndefined();
   });
 });
-
-type ShellDepsWithLiveConnectionChange = Parameters<
-  typeof createShellApp
->[0] & {
-  onLiveConnectionChange(connected: boolean): void;
-};
 
 function descriptor(
   workspaceId: string,

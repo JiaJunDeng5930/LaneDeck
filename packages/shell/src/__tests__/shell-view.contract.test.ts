@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { isAllowedContentOrigin } from "../ui/ShellView";
+import {
+  isAllowedContentOrigin,
+  shellVisibleStatusForReadiness,
+} from "../ui/ShellView";
 
 describe("ShellView content message origin filtering", () => {
   it.each([
@@ -36,5 +39,41 @@ describe("ShellView content message origin filtering", () => {
     expect(
       isAllowedContentOrigin(origin, "http://localhost:4173/app.html"),
     ).toBe(false);
+  });
+});
+
+describe("ShellView visible readiness", () => {
+  it("shows Ready only after startup, content, and live connection are ready", () => {
+    expect(
+      shellVisibleStatusForReadiness({
+        startupSettled: true,
+        contentReady: true,
+        liveReady: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      shellVisibleStatusForReadiness({
+        startupSettled: false,
+        contentReady: true,
+        liveReady: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      shellVisibleStatusForReadiness({
+        startupSettled: true,
+        contentReady: true,
+        liveReady: true,
+      }),
+    ).toBe("Ready");
+  });
+
+  it("shows Content error after startup settles without ready content", () => {
+    expect(
+      shellVisibleStatusForReadiness({
+        startupSettled: true,
+        contentReady: false,
+        liveReady: true,
+      }),
+    ).toBe("Content error");
   });
 });

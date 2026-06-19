@@ -33,6 +33,7 @@ export interface ShellDeps {
   now?: () => string;
   liveConnectTimeoutMs?: number;
   onContentSession?: (session: ContentSession) => void;
+  onLiveConnectionChange?: (connected: boolean) => void;
   onPickerModeChange?: (enabled: boolean) => void;
 }
 
@@ -250,8 +251,12 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       state = "Stopped";
       lifecycleGeneration += 1;
       await liveConnection?.close();
+      if (liveConnection !== undefined) {
+        deps.onLiveConnectionChange?.(false);
+      }
       await deps.contentLoader.close();
       activeSession = undefined;
+      liveConnection = undefined;
     },
   };
 
@@ -275,6 +280,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         return;
       }
       liveConnection = connection;
+      deps.onLiveConnectionChange?.(true);
     } catch (error) {
       await safelyRecordDiagnostics("live", [
         { path: "$", message: errorMessage(error) },
