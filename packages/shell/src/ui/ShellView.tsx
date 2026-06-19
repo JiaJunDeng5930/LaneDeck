@@ -9,6 +9,7 @@ import {
   createNavigatorClipboardWriter,
   createShellApp,
   createWebSocketLiveClient,
+  targetOriginForContentUri,
   type ShellApp,
 } from "../index";
 
@@ -135,16 +136,13 @@ function isHostedContentMessage(
 ): boolean {
   return (
     iframe?.contentWindow === event.source &&
-    isAllowedContentOrigin(event.origin)
+    isAllowedContentOrigin(event.origin, iframe.src)
   );
 }
 
-function isAllowedContentOrigin(origin: string): boolean {
-  return (
-    origin === "lanedeck://localhost" ||
-    origin === "lanedeck://content" ||
-    origin === "http://lanedeck.localhost" ||
-    origin === "https://lanedeck.localhost" ||
-    origin === "null"
-  );
+export function isAllowedContentOrigin(
+  origin: string,
+  contentSource: string,
+): boolean {
+  return origin === targetOriginForContentUri(contentSource);
 }

@@ -36,6 +36,7 @@ export {
   createIframeHost,
   dashboardRoute,
   defaultHostState,
+  targetOriginForContentUri,
 } from "./content";
 export type { ClipboardWriter, PickCopyResult } from "./picker";
 export { PickerController, createNavigatorClipboardWriter } from "./picker";

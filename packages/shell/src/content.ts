@@ -332,7 +332,7 @@ export function targetOriginForContentUri(uri: string): string | undefined {
       return parsed.origin;
     }
     if (parsed.protocol === "lanedeck:" && parsed.host.length > 0) {
-      return `${parsed.protocol}//${parsed.host}`;
+      return "http://lanedeck.localhost";
     }
   } catch {
     return undefined;
