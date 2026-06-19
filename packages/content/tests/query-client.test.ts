@@ -24,7 +24,7 @@ describe("center query client", () => {
     await expect(
       client.query({
         workspaceId: "workspace.local",
-        query: "dashboard",
+        query: "current_state",
         params: {},
       }),
     ).resolves.toEqual({
@@ -38,7 +38,7 @@ describe("center query client", () => {
         method: "POST",
         body: JSON.stringify({
           workspaceId: "workspace.local",
-          query: "dashboard",
+          query: "current_state",
           params: {},
         }),
       }),
@@ -62,7 +62,7 @@ describe("center query client", () => {
     await expect(
       client.query({
         workspaceId: "workspace.local",
-        query: "dashboard",
+        query: "current_state",
         params: {},
       }),
     ).rejects.toBeInstanceOf(ContentError);
@@ -102,7 +102,7 @@ describe("center query client", () => {
     await expect(
       client.query({
         workspaceId: "workspace.local",
-        query: "dashboard",
+        query: "current_state",
         params: {},
       }),
     ).rejects.toBeInstanceOf(ContentError);
@@ -123,7 +123,7 @@ describe("center query client", () => {
     client.setReadToken?.("shell-read-token");
     await client.query({
       workspaceId: "workspace.local",
-      query: "dashboard",
+      query: "current_state",
       params: {},
     });
 
@@ -141,7 +141,7 @@ describe("center query client", () => {
     await expect(
       client.query({
         workspaceId: "workspace.local",
-        query: "dashboard",
+        query: "current_content",
         params: {},
       }),
     ).rejects.toBeInstanceOf(ContentError);
