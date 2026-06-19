@@ -95,7 +95,7 @@ export function createIframeContentLoader(
           if (activeSession === session) {
             session.postMessage({
               type: "init",
-              payload: { hostState },
+              payload: { hostState: session.hostState ?? hostState },
             });
           }
         };

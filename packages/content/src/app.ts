@@ -34,6 +34,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
   let hostState: ShellHostState = { pickerEnabled: false };
   let activeRegistrations: PickRegistration[] = [];
   let renderSequence = 0;
+  let currentRoute: ContentRoute | undefined;
   let disposed = false;
 
   const pickSubscription = subscribePickTargets((target) => {
@@ -73,6 +74,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
     async render(route) {
       const sequence = (renderSequence += 1);
+      currentRoute = route;
       clearActiveRegistrations();
 
       try {
@@ -98,7 +100,13 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     },
 
     setHostState(state) {
+      const nextRoute = state.route;
+      const shouldRender =
+        nextRoute !== undefined && !sameContentRoute(currentRoute, nextRoute);
       applyHostState(state);
+      if (shouldRender) {
+        void app.render(nextRoute);
+      }
     },
 
     reportPickTarget(target) {
@@ -124,9 +132,6 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     deps.shell.subscribeHostState?.((state) => {
       if (!disposed) {
         app.setHostState(state);
-        if (state.route !== undefined) {
-          void app.render(state.route);
-        }
       }
     });
 
@@ -200,6 +205,45 @@ export function createContentApp(deps: ContentDeps): ContentApp {
   }
 
   return app;
+}
+
+function sameContentRoute(
+  current: ContentRoute | undefined,
+  next: ContentRoute,
+): boolean {
+  if (current === undefined || current.view !== next.view) {
+    return false;
+  }
+  if (current.workspaceId !== next.workspaceId) {
+    return false;
+  }
+  if (current.view === "dashboard" && next.view === "dashboard") {
+    return (
+      current.laneId === next.laneId &&
+      stableJsonKey(current.params ?? {}) === stableJsonKey(next.params ?? {})
+    );
+  }
+  if (current.view === "custom" && next.view === "custom") {
+    return (
+      current.query === next.query &&
+      current.title === next.title &&
+      stableJsonKey(current.params ?? {}) === stableJsonKey(next.params ?? {})
+    );
+  }
+  return false;
+}
+
+function stableJsonKey(input: unknown): string {
+  if (Array.isArray(input)) {
+    return `[${input.map(stableJsonKey).join(",")}]`;
+  }
+  if (typeof input === "object" && input !== null) {
+    return `{${Object.entries(input)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${JSON.stringify(key)}:${stableJsonKey(value)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(input) ?? "undefined";
 }
 
 function resolveRoot(): HTMLElement {
