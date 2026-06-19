@@ -35,6 +35,8 @@ export function createContentApp(deps: ContentDeps): ContentApp {
   let activeRegistrations: PickRegistration[] = [];
   let renderSequence = 0;
   let currentRoute: ContentRoute | undefined;
+  let pendingRoute: ContentRoute | undefined;
+  let retryRouteAfterFailure: ContentRoute | undefined;
   let disposed = false;
 
   const pickSubscription = subscribePickTargets((target) => {
@@ -74,7 +76,8 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
     async render(route) {
       const sequence = (renderSequence += 1);
-      currentRoute = route;
+      pendingRoute = route;
+      retryRouteAfterFailure = undefined;
       clearActiveRegistrations();
 
       try {
@@ -87,9 +90,20 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         const rendered = renderDashboardMarkup(route, response);
         root.innerHTML = rendered.html;
         activeRegistrations = bindRenderedPickTargets(root);
+        currentRoute = route;
+        pendingRoute = undefined;
+        retryRouteAfterFailure = undefined;
         await reportHeight();
       } catch (error) {
         if (sequence !== renderSequence || disposed) {
+          return;
+        }
+
+        const retryRoute = retryRouteAfterFailure;
+        pendingRoute = undefined;
+        retryRouteAfterFailure = undefined;
+        if (retryRoute !== undefined && sameContentRoute(route, retryRoute)) {
+          await app.render(retryRoute);
           return;
         }
 
@@ -101,9 +115,18 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
     setHostState(state) {
       const nextRoute = state.route;
+      const shouldRetryPendingRoute =
+        nextRoute !== undefined &&
+        pendingRoute !== undefined &&
+        sameContentRoute(pendingRoute, nextRoute) &&
+        hasQueryAccessPatch(state);
       const shouldRender =
-        nextRoute !== undefined && !sameContentRoute(currentRoute, nextRoute);
+        nextRoute !== undefined &&
+        !sameContentRoute(pendingRoute ?? currentRoute, nextRoute);
       applyHostState(state);
+      if (shouldRetryPendingRoute) {
+        retryRouteAfterFailure = nextRoute;
+      }
       if (shouldRender) {
         void app.render(nextRoute);
       }
@@ -233,6 +256,12 @@ function sameContentRoute(
     );
   }
   return false;
+}
+
+function hasQueryAccessPatch(state: ShellHostState): boolean {
+  return (
+    state.centerQueryUrl !== undefined || state.centerReadToken !== undefined
+  );
 }
 
 function stableJsonKey(input: unknown): string {
