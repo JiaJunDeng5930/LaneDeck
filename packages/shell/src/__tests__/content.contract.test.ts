@@ -35,23 +35,62 @@ describe("content iframe loading", () => {
     ]);
   });
 
-  it("posts lanedeck iframe messages to the strict source origin", () => {
+  it.each([
+    [
+      "init",
+      {
+        type: "init",
+        payload: { hostState: bootstrapHostState(false) },
+      } satisfies ShellToContentMessage,
+    ],
+    [
+      "host_state",
+      {
+        type: "host_state",
+        payload: { hostState: bootstrapHostState(false) },
+      } satisfies ShellToContentMessage,
+    ],
+  ])(
+    "posts token-free lanedeck %s messages to wildcard for opaque content origins",
+    (_type, message) => {
+      const postMessage = vi.fn();
+      const iframe = testIframe(postMessage);
+      const host = createIframeHost(iframe);
+
+      host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
+      host.postMessage(message);
+
+      expect(postMessage).toHaveBeenCalledWith(message, "*");
+    },
+  );
+
+  it("posts token-bearing lanedeck iframe messages only to strict candidate origins", () => {
     const postMessage = vi.fn();
     const iframe = testIframe(postMessage);
     const host = createIframeHost(iframe);
     const message: ShellToContentMessage = {
       type: "host_state",
-      payload: { hostState: bootstrapHostState(false) },
+      payload: { hostState: hostState(false) },
     };
 
     host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
     host.postMessage(message);
 
-    expect(postMessage).toHaveBeenCalledWith(
-      message,
-      "http://lanedeck.localhost",
+    const calls = postMessage.mock.calls;
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        [message, "http://lanedeck.localhost"],
+        [message, "https://lanedeck.localhost"],
+        [message, "lanedeck://localhost"],
+      ]),
     );
-    expect(postMessage.mock.calls[0]?.[1]).not.toBe("*");
+    const wildcardCalls = calls.filter((call) => call[1] === "*");
+    for (const [wildcardMessage] of wildcardCalls) {
+      const wildcardHostState = (
+        wildcardMessage as { payload: { hostState: Record<string, unknown> } }
+      ).payload.hostState;
+      expect(wildcardHostState).not.toHaveProperty("centerReadToken");
+    }
   });
 
   it.each([

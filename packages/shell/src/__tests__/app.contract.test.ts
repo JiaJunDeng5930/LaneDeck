@@ -106,6 +106,39 @@ describe("shell app contract", () => {
     });
   });
 
+  it("keeps custom descriptor routes in content host state", async () => {
+    const route = {
+      view: "custom" as const,
+      workspaceId: "workspace.local",
+      title: "Build failures",
+      query: "current_content",
+      params: { severity: "warning", laneId: "lane.build" },
+    };
+    const center = new FakeCenter([
+      descriptor("workspace.local", "rev-1", { route }),
+    ]);
+    const content = new FakeContentLoader();
+    const app = createShellApp({
+      center,
+      live: new FakeLive(),
+      contentLoader: content,
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+    });
+
+    await app.start();
+
+    expect(content.loads).toEqual([
+      descriptor("workspace.local", "rev-1", { route }),
+    ]);
+    expect(content.hostStates[0]).toEqual({
+      pickerEnabled: false,
+      workspaceId: "workspace.local",
+      contentRevision: "rev-1",
+      route,
+    });
+  });
+
   it("reloads content when the live channel emits content_changed", async () => {
     const center = new FakeCenter([
       descriptor("workspace.local", "rev-1"),
