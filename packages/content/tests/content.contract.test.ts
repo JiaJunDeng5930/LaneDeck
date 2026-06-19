@@ -66,7 +66,7 @@ describe("content package contract", () => {
     expect(query.requests).toEqual([
       {
         workspaceId: "workspace.local",
-        query: "dashboard",
+        query: "current_state",
         params: { laneId: "lane.build" },
       },
     ]);
@@ -76,6 +76,68 @@ describe("content package contract", () => {
       type: "height_changed",
       payload: { height: 320 },
     });
+    app.dispose();
+  });
+
+  it("renders frames from the current_state response in center order", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const query = new FakeQuery({
+      rows: [
+        {
+          frames: [
+            {
+              laneId: "lane.alpha",
+              stage: "metric",
+              frameNo: 1,
+              recordCount: 2,
+              triggerKind: "count",
+              closedAt: "2026-06-11T00:01:00.000Z",
+              summary: { eventText: "alpha metric frame" },
+            },
+            {
+              laneId: "lane.beta",
+              stage: "event",
+              frameNo: 2,
+              recordCount: 0,
+              triggerKind: "time",
+              closedAt: "2026-06-11T00:02:00.000Z",
+              summary: { eventText: "beta quiet frame" },
+            },
+          ],
+        },
+      ],
+      diagnostics: [],
+    });
+    const app = createContentApp({
+      query,
+      shell: new FakeShell({ hostState: { pickerEnabled: false } }),
+    });
+
+    await app.render({
+      view: "dashboard",
+      workspaceId: "workspace.local",
+    });
+
+    expect(document.root.innerHTML).toContain("alpha metric frame");
+    expect(document.root.innerHTML).toContain("lane.alpha");
+    expect(document.root.innerHTML).toContain("<dd>metric</dd>");
+    expect(document.root.innerHTML).toContain("<dd>2</dd>");
+    expect(document.root.innerHTML).toContain("<dd>count</dd>");
+    expect(document.root.innerHTML).toContain(
+      "<dd>2026-06-11T00:01:00.000Z</dd>",
+    );
+    expect(document.root.innerHTML).toContain("beta quiet frame");
+    expect(document.root.innerHTML).toContain("lane.beta");
+    expect(document.root.innerHTML).toContain("<dd>event</dd>");
+    expect(document.root.innerHTML).toContain("<dd>0</dd>");
+    expect(document.root.innerHTML).toContain("<dd>time</dd>");
+    expect(document.root.innerHTML).toContain(
+      "<dd>2026-06-11T00:02:00.000Z</dd>",
+    );
+    expect(document.root.innerHTML.indexOf("alpha metric frame")).toBeLessThan(
+      document.root.innerHTML.indexOf("beta quiet frame"),
+    );
     app.dispose();
   });
 
@@ -109,6 +171,11 @@ describe("content package contract", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const init = fetch.mock.calls[0]?.[1];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      workspaceId: "workspace.local",
+      query: "current_state",
+      params: {},
+    });
     expect((init?.headers as Headers).get("authorization")).toBe(
       "Bearer shell-read-token",
     );
@@ -289,7 +356,7 @@ describe("content package contract", () => {
 
     expect(query.requests).toContainEqual({
       workspaceId: "workspace.local",
-      query: "dashboard",
+      query: "current_state",
       params: { laneId: "lane.route-update" },
     });
     expect(document.root.innerHTML).toContain("route update render");
