@@ -34,7 +34,7 @@ describe("content iframe loading", () => {
     ]);
   });
 
-  it("sends init with host state before the iframe load event", async () => {
+  it("sends bootstrap init before load and full host state after load", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
     const descriptor = descriptorWithHostState();
@@ -44,37 +44,9 @@ describe("content iframe loading", () => {
 
     expect(host.messages).toContainEqual({
       type: "init",
-      payload: { hostState: hostState(false) },
+      payload: { hostState: bootstrapHostState(false) },
     });
 
-    host.completeLoad();
-
-    await expect(session).resolves.toMatchObject({
-      status: "ready",
-      revision: "rev-1",
-      reloadCount: 1,
-    });
-  });
-
-  it("uses the latest session host state when init follows a picker update", async () => {
-    const host = new FakeFrameHost();
-    const loader = createIframeContentLoader(host);
-    const session = loader.loadCurrent(
-      {
-        workspaceId: "workspace.local",
-        revision: "rev-1",
-        path: "index.html",
-      },
-      hostState(false),
-    );
-    await Promise.resolve();
-
-    expect(host.messages).toContainEqual({
-      type: "init",
-      payload: { hostState: hostState(false) },
-    });
-
-    loader.setPickerMode(true);
     host.completeLoad();
 
     await expect(session).resolves.toMatchObject({
@@ -83,8 +55,101 @@ describe("content iframe loading", () => {
       reloadCount: 1,
     });
     expect(host.messages.at(-1)).toEqual({
-      type: "init",
-      payload: { hostState: hostState(true) },
+      type: "host_state",
+      payload: { hostState: hostState(false) },
+    });
+  });
+
+  it("retries bootstrap init with latest picker state before full host state", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = new FakeFrameHost();
+      const loader = createIframeContentLoader(host);
+      const session = loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-1",
+          path: "index.html",
+        },
+        hostState(false),
+      );
+      await Promise.resolve();
+
+      expect(host.messages.at(-1)).toEqual({
+        type: "init",
+        payload: { hostState: bootstrapHostState(false) },
+      });
+
+      loader.setPickerMode(true);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(host.messages.at(-1)).toEqual({
+        type: "init",
+        payload: { hostState: bootstrapHostState(true) },
+      });
+
+      host.completeLoad();
+
+      await expect(session).resolves.toMatchObject({
+        status: "ready",
+        revision: "rev-1",
+        reloadCount: 1,
+      });
+      expect(host.messages.at(-1)).toEqual({
+        type: "host_state",
+        payload: { hostState: hostState(true) },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps bootstrap init token-free when switching from external to generated content", async () => {
+    const host = new FakeFrameHost();
+    const loader = createIframeContentLoader(host);
+
+    const external = loader.loadCurrent(
+      {
+        workspaceId: "workspace.local",
+        revision: "rev-external",
+        path: "index.html",
+        uri: "https://evil.example/app.html",
+      },
+      hostState(false, "rev-external"),
+    );
+    await Promise.resolve();
+    expect(host.messages).toEqual([
+      {
+        type: "init",
+        payload: { hostState: bootstrapHostState(false) },
+      },
+    ]);
+    host.completeLoad();
+    await expect(external).resolves.toMatchObject({ status: "ready" });
+    host.messages.length = 0;
+
+    const generated = loader.loadCurrent(
+      {
+        workspaceId: "workspace.local",
+        revision: "rev-1",
+        path: "index.html",
+      },
+      hostState(false, "rev-1"),
+    );
+    await Promise.resolve();
+
+    expect(host.messages).toEqual([
+      {
+        type: "init",
+        payload: { hostState: bootstrapHostState(false) },
+      },
+    ]);
+
+    host.completeLoad();
+    await expect(generated).resolves.toMatchObject({ status: "ready" });
+    expect(host.messages.at(-1)).toEqual({
+      type: "host_state",
+      payload: { hostState: hostState(false, "rev-1") },
     });
   });
 
@@ -98,7 +163,7 @@ describe("content iframe loading", () => {
 
     expect(host.messages).toContainEqual({
       type: "init",
-      payload: { hostState: hostState(false) },
+      payload: { hostState: bootstrapHostState(false) },
     });
     expect(host.messages.at(-1)).toEqual({
       type: "host_state",
@@ -183,6 +248,9 @@ describe("content iframe loading", () => {
         Promise.resolve("still-pending" as const),
       ]);
       expect(result).toMatchObject({ status: "error" });
+      expect(host.currentSource).toBe(
+        "lanedeck://content/workspace.local/rev-1/index.html",
+      );
 
       loader.setPickerMode(true);
       loader.setHeight(420);
@@ -192,6 +260,36 @@ describe("content iframe loading", () => {
         payload: { hostState: hostState(true, "rev-1") },
       });
       expect(host.heights).toEqual([420]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the frame when initial iframe load times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = new FakeFrameHost();
+      const loader = createTimedIframeContentLoader(host, { loadTimeoutMs: 5 });
+
+      const session = loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-1",
+          path: "index.html",
+        },
+        hostState(false, "rev-1"),
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(6);
+
+      const result = await Promise.race([
+        session,
+        Promise.resolve("still-pending" as const),
+      ]);
+
+      expect(result).toMatchObject({ status: "error" });
+      expect(host.currentSource).toBeUndefined();
+      expect(host.closeCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -269,6 +367,10 @@ function hostState(
   };
 }
 
+function bootstrapHostState(pickerEnabled: boolean): ContentHostState {
+  return { pickerEnabled };
+}
+
 async function loadReady(
   session: Promise<ContentSession>,
   host: FakeFrameHost,
@@ -293,6 +395,8 @@ class FakeFrameHost implements ContentFrameHost {
   readonly sources: string[] = [];
   readonly messages: unknown[] = [];
   readonly heights: number[] = [];
+  currentSource: string | undefined;
+  closeCount = 0;
   private loadResolver: (() => void) | undefined;
   private nextSetSourceError: Error | undefined;
 
@@ -303,6 +407,7 @@ class FakeFrameHost implements ContentFrameHost {
       throw error;
     }
     this.sources.push(uri);
+    this.currentSource = uri;
   }
 
   postMessage(message: ShellToContentMessage): void {
@@ -327,5 +432,8 @@ class FakeFrameHost implements ContentFrameHost {
     this.heights.push(height);
   }
 
-  close(): void {}
+  close(): void {
+    this.closeCount += 1;
+    this.currentSource = undefined;
+  }
 }
