@@ -19,6 +19,7 @@ import {
 const readiness = readHarnessReadiness([
   "centerHttpUrl",
   "shellHttpUrl",
+  "shellContentArtifactWriteUrl",
   "aiMutationToken",
   "agentToken",
 ]);
@@ -31,8 +32,13 @@ test.describe("AI content mutation to shell reload", () => {
     request,
   }) => {
     const mutation = makePatchContentMutation();
-    const { centerHttpUrl, shellHttpUrl, aiMutationToken, agentToken } =
-      readiness.harness;
+    const {
+      centerHttpUrl,
+      shellHttpUrl,
+      shellContentArtifactWriteUrl,
+      aiMutationToken,
+      agentToken,
+    } = readiness.harness;
 
     await page.goto(shellHttpUrl!);
     await waitForShellReady(page);
@@ -75,6 +81,12 @@ test.describe("AI content mutation to shell reload", () => {
       buildRequestResult.buildRequestId!,
       patchResult.contentRevision!,
     );
+    const shellArtifactResponse = await request.post(
+      shellContentArtifactWriteUrl!,
+      { data: buildComplete },
+    );
+    expect(shellArtifactResponse.ok()).toBe(true);
+
     const buildCompleteResponse = await request.post(
       apiUrl(centerHttpUrl!, "/api/content/build-complete"),
       {

@@ -11,6 +11,7 @@ const capabilities = {
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
+  shellContentArtifactWriteUrl: "LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
   readToken: "LANEDECK_READ_TOKEN",
@@ -60,6 +61,7 @@ function requiredCapabilities(args) {
     if (spec.includes("content-mutation-flow")) {
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
+      required.add("shellContentArtifactWriteUrl");
       required.add("aiMutationToken");
       required.add("agentToken");
     }

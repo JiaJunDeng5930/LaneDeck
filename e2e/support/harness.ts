@@ -4,6 +4,7 @@ export interface LaneDeckE2EHarness {
   agentSourceInputUrl?: string;
   centerHttpUrl?: string;
   shellHttpUrl?: string;
+  shellContentArtifactWriteUrl?: string;
   liveWsUrl?: string;
   agentSpoolObservationUrl?: string;
   readToken?: string;
@@ -23,6 +24,7 @@ const capabilityLabels: Record<HarnessCapability, string> = {
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
+  shellContentArtifactWriteUrl: "LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
   readToken: "LANEDECK_READ_TOKEN",
@@ -89,6 +91,9 @@ function readHarness(): LaneDeckE2EHarness {
     centerHttpUrl:
       process.env.LANEDECK_CENTER_HTTP_URL ?? fixture.centerHttpUrl,
     shellHttpUrl: process.env.LANEDECK_SHELL_HTTP_URL ?? fixture.shellHttpUrl,
+    shellContentArtifactWriteUrl:
+      process.env.LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL ??
+      fixture.shellContentArtifactWriteUrl,
     liveWsUrl: process.env.LANEDECK_LIVE_WS_URL ?? fixture.liveWsUrl,
     agentSpoolObservationUrl:
       process.env.LANEDECK_AGENT_SPOOL_OBSERVATION_URL ??

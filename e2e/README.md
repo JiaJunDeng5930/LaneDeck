@@ -10,6 +10,7 @@ The default e2e run validates the test harness and reports skipped full-system s
 - `LANEDECK_AGENT_SOURCE_INPUT_URL`
 - `LANEDECK_CENTER_HTTP_URL`
 - `LANEDECK_SHELL_HTTP_URL`
+- `LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL`
 - `LANEDECK_LIVE_WS_URL`
 - `LANEDECK_AGENT_SPOOL_OBSERVATION_URL`
 - `LANEDECK_READ_TOKEN`
@@ -19,6 +20,8 @@ The default e2e run validates the test harness and reports skipped full-system s
 `LANEDECK_E2E_FIXTURE` may point to a JSON file with the same camelCase fields used by `support/harness.ts`. Environment values override fixture file values.
 
 The scenarios use `LANEDECK_READ_TOKEN` for center query reads, `LANEDECK_AI_MUTATION_TOKEN` for AI mutation requests, and `LANEDECK_AGENT_TOKEN` for content build-complete callbacks.
+
+`LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL` is a harness-only endpoint. It accepts the content build-complete payload shape, or at minimum `{ workspaceId, contentRevision, entrypoint, artifacts }`, and writes artifacts into the shell `LANEDECK_CONTENT_ROOT` readable location before center promotion broadcasts a reload.
 
 ## Scenario Files
 
