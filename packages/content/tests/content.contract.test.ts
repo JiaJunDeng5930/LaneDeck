@@ -340,6 +340,67 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("rerenders the same route when full host state restores query access after an initial failure", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const route = {
+      view: "dashboard" as const,
+      workspaceId: "workspace.local",
+      laneId: "lane.recovered",
+    };
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          rows: [
+            {
+              laneId: "lane.recovered",
+              eventText: "recovered render",
+            },
+          ],
+          diagnostics: [],
+        }),
+    );
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        route,
+      },
+    });
+    const app = createContentApp({
+      query: createHttpCenterQueryClient({ fetch }),
+      shell,
+    });
+
+    await app.init();
+
+    expect(fetch).toHaveBeenCalledTimes(0);
+    expect(document.root.innerHTML).toContain("content render failed");
+
+    shell.updateHostState({
+      pickerEnabled: false,
+      centerQueryUrl: "https://center.example.test/api/query",
+      centerReadToken: "recovered-read-token",
+      route,
+    } as ShellHostState & { centerReadToken: string });
+    await drainAsyncWork();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://center.example.test/api/query",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const recovered = fetch.mock.calls[0]?.[1];
+    expect(JSON.parse(String(recovered?.body))).toEqual({
+      workspaceId: "workspace.local",
+      query: "current_state",
+      params: { laneId: "lane.recovered" },
+    });
+    expect((recovered?.headers as Headers).get("authorization")).toBe(
+      "Bearer recovered-read-token",
+    );
+    expect(document.root.innerHTML).toContain("recovered render");
+    app.dispose();
+  });
+
   it("applies picker mode updates after shell init", async () => {
     const shell = new FakeShell({
       hostState: { pickerEnabled: false },
@@ -714,6 +775,13 @@ class FakeQuery implements CenterQueryClient {
 
 function hasPickIdentity(pickId: string, candidates: string[]): boolean {
   return candidates.some((candidate) => pickId.includes(candidate));
+}
+
+async function drainAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 class SequencedQuery implements CenterQueryClient {
