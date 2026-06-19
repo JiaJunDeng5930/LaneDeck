@@ -51,6 +51,12 @@ export interface ContentLoadFailure {
 
 export type ContentSession = LoadedContentSession | ContentLoadFailure;
 
+interface PendingLoadState {
+  session: LoadedContentSession;
+  loadCleanup?: () => void;
+  initCleanup?: () => void;
+}
+
 export interface ContentLoader {
   loadCurrent(
     descriptor: CurrentContentDescriptor,
@@ -68,8 +74,7 @@ export function createIframeContentLoader(
   let activeSession: LoadedContentSession | undefined;
   let pendingSession: LoadedContentSession | undefined;
   let reloadCount = 0;
-  let pendingLoadCleanup: (() => void) | undefined;
-  let pendingInitCleanup: (() => void) | undefined;
+  let pendingLoad: PendingLoadState | undefined;
   const loadTimeoutMs = options.loadTimeoutMs ?? 5_000;
 
   return {
@@ -78,12 +83,11 @@ export function createIframeContentLoader(
       hostState = defaultHostState(descriptor),
     ): Promise<ContentSession> {
       let session: LoadedContentSession | undefined;
+      let loadState: PendingLoadState | undefined;
       const previousActiveSession = activeSession;
       try {
-        pendingLoadCleanup?.();
-        pendingLoadCleanup = undefined;
-        pendingInitCleanup?.();
-        pendingInitCleanup = undefined;
+        cleanupPendingLoad(pendingLoad);
+        pendingLoad = undefined;
         reloadCount += 1;
         const uri = contentUriFor(descriptor);
         session = {
@@ -101,22 +105,25 @@ export function createIframeContentLoader(
           },
           async close() {
             if (activeSession === this) {
-              pendingLoadCleanup?.();
-              pendingLoadCleanup = undefined;
-              pendingInitCleanup?.();
-              pendingInitCleanup = undefined;
+              cleanupPendingLoad(loadState);
+              if (pendingLoad === loadState) {
+                pendingLoad = undefined;
+              }
               activeSession = undefined;
             }
             if (pendingSession === this) {
-              pendingLoadCleanup?.();
-              pendingLoadCleanup = undefined;
-              pendingInitCleanup?.();
-              pendingInitCleanup = undefined;
+              cleanupPendingLoad(loadState);
+              if (pendingLoad === loadState) {
+                pendingLoad = undefined;
+              }
               pendingSession = undefined;
             }
             await host.close();
           },
         };
+        loadState = { session };
+        const currentLoadState = loadState;
+        pendingLoad = currentLoadState;
         pendingSession = session;
         const createdSession = session;
         const sendBootstrapInit = () => {
@@ -135,35 +142,38 @@ export function createIframeContentLoader(
           }
         };
         host.setSource(uri);
-        pendingInitCleanup = startInitRetry(sendBootstrapInit);
+        currentLoadState.initCleanup = startInitRetry(sendBootstrapInit);
         await waitForFrameLoad(host, loadTimeoutMs, (cleanup) => {
-          pendingLoadCleanup = cleanup;
+          currentLoadState.loadCleanup = cleanup;
         });
-        if (pendingLoadCleanup !== undefined) {
-          pendingLoadCleanup = undefined;
+        if (currentLoadState.loadCleanup !== undefined) {
+          currentLoadState.loadCleanup = undefined;
         }
-        pendingInitCleanup?.();
-        pendingInitCleanup = undefined;
+        currentLoadState.initCleanup?.();
+        currentLoadState.initCleanup = undefined;
         if (pendingSession === session) {
           activeSession = session;
           pendingSession = undefined;
+          if (pendingLoad === currentLoadState) {
+            pendingLoad = undefined;
+          }
           sendFullInit(session, hostState);
           sendHostState(session, hostState);
         }
         return session;
       } catch (error) {
+        cleanupPendingLoad(loadState);
         if (pendingSession === session) {
           pendingSession = undefined;
+          if (pendingLoad === loadState) {
+            pendingLoad = undefined;
+          }
           await restoreAbandonedFrame(
             host,
             previousActiveSession,
             loadTimeoutMs,
           );
         }
-        pendingLoadCleanup?.();
-        pendingLoadCleanup = undefined;
-        pendingInitCleanup?.();
-        pendingInitCleanup = undefined;
         return contentLoadFailure(error, descriptor);
       }
     },
@@ -183,15 +193,23 @@ export function createIframeContentLoader(
       activeSession?.setHeight(height);
     },
     async close(): Promise<void> {
-      pendingLoadCleanup?.();
-      pendingLoadCleanup = undefined;
-      pendingInitCleanup?.();
-      pendingInitCleanup = undefined;
+      cleanupPendingLoad(pendingLoad);
+      pendingLoad = undefined;
       activeSession = undefined;
       pendingSession = undefined;
       await host.close();
     },
   };
+}
+
+function cleanupPendingLoad(loadState: PendingLoadState | undefined): void {
+  if (loadState === undefined) {
+    return;
+  }
+  loadState.loadCleanup?.();
+  loadState.loadCleanup = undefined;
+  loadState.initCleanup?.();
+  loadState.initCleanup = undefined;
 }
 
 function sendFullInit(
@@ -351,6 +369,7 @@ export function contentMessageOriginPolicyForUri(
     }
     if (parsed.protocol === "lanedeck:" && parsed.host.length > 0) {
       const strictTargetOrigins = [
+        "lanedeck://content",
         "http://lanedeck.localhost",
         "https://lanedeck.localhost",
         "lanedeck://localhost",
