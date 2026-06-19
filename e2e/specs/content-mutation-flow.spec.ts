@@ -3,11 +3,22 @@ import { expect, test } from "@playwright/test";
 import { observeFirstIframeReload } from "../support/browser";
 import {
   e2ePatchedContentText,
+  makeContentBuildCompleteRequest,
   makePatchContentMutation,
+  makeRequestLocalBuildMutation,
 } from "../support/contract-fixtures";
-import { apiUrl, readHarnessReadiness } from "../support/harness";
+import {
+  apiUrl,
+  bearerHeaders,
+  readHarnessReadiness,
+} from "../support/harness";
 
-const readiness = readHarnessReadiness(["centerHttpUrl", "shellHttpUrl"]);
+const readiness = readHarnessReadiness([
+  "centerHttpUrl",
+  "shellHttpUrl",
+  "aiMutationToken",
+  "agentToken",
+]);
 
 test.describe("AI content mutation to shell reload", () => {
   test.skip(readiness.skip, readiness.reason);
@@ -17,24 +28,61 @@ test.describe("AI content mutation to shell reload", () => {
     request,
   }) => {
     const mutation = makePatchContentMutation();
-    const { centerHttpUrl, shellHttpUrl } = readiness.harness;
+    const { centerHttpUrl, shellHttpUrl, aiMutationToken, agentToken } =
+      readiness.harness;
 
     await page.goto(shellHttpUrl!);
     const reloadObserver = await observeFirstIframeReload(page);
 
     const mutationResponse = await request.post(
       apiUrl(centerHttpUrl!, "/api/ai/mutation"),
-      { data: mutation },
+      { data: mutation, headers: bearerHeaders(aiMutationToken!) },
     );
     expect(mutationResponse.ok()).toBe(true);
 
-    const result = (await mutationResponse.json()) as {
+    const patchResult = (await mutationResponse.json()) as {
       mutation?: string;
       contentRevision?: string;
     };
-    expect(result.mutation).toBe("patch_content");
-    expect(typeof result.contentRevision).toBe("string");
-    expect(result.contentRevision?.length).toBeGreaterThan(0);
+    expect(patchResult.mutation).toBe("patch_content");
+    expect(typeof patchResult.contentRevision).toBe("string");
+    expect(patchResult.contentRevision?.length).toBeGreaterThan(0);
+
+    const buildRequestMutation = makeRequestLocalBuildMutation(
+      patchResult.contentRevision!,
+    );
+    const buildRequestResponse = await request.post(
+      apiUrl(centerHttpUrl!, "/api/ai/mutation"),
+      {
+        data: buildRequestMutation,
+        headers: bearerHeaders(aiMutationToken!),
+      },
+    );
+    expect(buildRequestResponse.ok()).toBe(true);
+    const buildRequestResult = (await buildRequestResponse.json()) as {
+      mutation?: string;
+      buildRequestId?: string;
+    };
+    expect(buildRequestResult.mutation).toBe("request_local_build");
+    expect(typeof buildRequestResult.buildRequestId).toBe("string");
+    expect(buildRequestResult.buildRequestId?.length).toBeGreaterThan(0);
+
+    const buildComplete = makeContentBuildCompleteRequest(
+      buildRequestResult.buildRequestId!,
+      patchResult.contentRevision!,
+    );
+    const buildCompleteResponse = await request.post(
+      apiUrl(centerHttpUrl!, "/api/content/build-complete"),
+      {
+        data: buildComplete,
+        headers: bearerHeaders(agentToken!),
+      },
+    );
+    expect(buildCompleteResponse.ok()).toBe(true);
+    await expect(buildCompleteResponse.json()).resolves.toMatchObject({
+      mutation: "patch_content",
+      contentRevision: patchResult.contentRevision,
+    });
 
     await reloadObserver.waitForNextReload();
     await expect(

@@ -13,6 +13,9 @@ const capabilities = {
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
+  readToken: "LANEDECK_READ_TOKEN",
+  aiMutationToken: "LANEDECK_AI_MUTATION_TOKEN",
+  agentToken: "LANEDECK_AGENT_TOKEN",
 };
 const required = requiredCapabilities(process.argv.slice(2));
 
@@ -51,11 +54,14 @@ function requiredCapabilities(args) {
       required.add("shellHttpUrl");
       required.add("liveWsUrl");
       required.add("agentSpoolObservationUrl");
+      required.add("readToken");
     }
 
     if (spec.includes("content-mutation-flow")) {
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
+      required.add("aiMutationToken");
+      required.add("agentToken");
     }
   }
 

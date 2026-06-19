@@ -12,8 +12,13 @@ The default e2e run validates the test harness and reports skipped full-system s
 - `LANEDECK_SHELL_HTTP_URL`
 - `LANEDECK_LIVE_WS_URL`
 - `LANEDECK_AGENT_SPOOL_OBSERVATION_URL`
+- `LANEDECK_READ_TOKEN`
+- `LANEDECK_AI_MUTATION_TOKEN`
+- `LANEDECK_AGENT_TOKEN`
 
 `LANEDECK_E2E_FIXTURE` may point to a JSON file with the same camelCase fields used by `support/harness.ts`. Environment values override fixture file values.
+
+The scenarios use `LANEDECK_READ_TOKEN` for center query reads, `LANEDECK_AI_MUTATION_TOKEN` for AI mutation requests, and `LANEDECK_AGENT_TOKEN` for content build-complete callbacks.
 
 ## Scenario Files
 

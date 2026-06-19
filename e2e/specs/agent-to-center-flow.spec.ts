@@ -7,7 +7,12 @@ import {
   makeCountTriggeredAgentInput,
   makeTimeTriggeredQuietSignalAgentInput,
 } from "../support/contract-fixtures";
-import { apiUrl, readHarnessReadiness, urlWithQuery } from "../support/harness";
+import {
+  apiUrl,
+  bearerHeaders,
+  readHarnessReadiness,
+  urlWithQuery,
+} from "../support/harness";
 import {
   connectJsonMessageObserver,
   matchesBatchNotification,
@@ -19,6 +24,7 @@ const readiness = readHarnessReadiness([
   "shellHttpUrl",
   "liveWsUrl",
   "agentSpoolObservationUrl",
+  "readToken",
 ]);
 
 test.describe("agent ingest to dashboard", () => {
@@ -35,6 +41,7 @@ test.describe("agent ingest to dashboard", () => {
       shellHttpUrl,
       liveWsUrl,
       agentSpoolObservationUrl,
+      readToken,
     } = readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(liveWsUrl!);
@@ -72,14 +79,23 @@ test.describe("agent ingest to dashboard", () => {
         {
           data: {
             workspaceId: agentInput.workspaceId,
-            query: "lane_events",
+            query: "current_state",
             params: { laneId: e2eLaneId },
           },
+          headers: bearerHeaders(readToken!),
         },
       );
       expect(queryResponse.ok()).toBe(true);
-      const queryBody = (await queryResponse.json()) as { rows?: unknown[] };
-      expect(JSON.stringify(queryBody.rows ?? [])).toContain(e2eEventText);
+      const frames = currentStateFrames(await queryResponse.json());
+      const countFrame = frames.find(
+        (frame) => frame.laneId === e2eLaneId && frame.triggerKind === "count",
+      );
+      expect(countFrame).toMatchObject({
+        laneId: e2eLaneId,
+        triggerKind: "count",
+        recordCount: 1,
+      });
+      expect(JSON.stringify(countFrame?.summary ?? {})).toContain(e2eEventText);
 
       await page.goto(shellHttpUrl!);
       await expect(
@@ -92,7 +108,8 @@ test.describe("agent ingest to dashboard", () => {
 
   test("persists a time-triggered quiet-signal event", async ({ request }) => {
     const agentInput = makeTimeTriggeredQuietSignalAgentInput();
-    const { agentSourceInputUrl, centerHttpUrl, liveWsUrl } = readiness.harness;
+    const { agentSourceInputUrl, centerHttpUrl, liveWsUrl, readToken } =
+      readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(liveWsUrl!);
 
@@ -118,20 +135,44 @@ test.describe("agent ingest to dashboard", () => {
         {
           data: {
             workspaceId: agentInput.workspaceId,
-            query: "lane_events",
+            query: "current_state",
             params: { laneId: e2eLaneId, triggerKind: "time" },
           },
+          headers: bearerHeaders(readToken!),
         },
       );
       expect(queryResponse.ok()).toBe(true);
 
-      const rows =
-        ((await queryResponse.json()) as { rows?: unknown[] }).rows ?? [];
-      expect(JSON.stringify(rows)).toContain(e2eQuietSignalText);
-      expect(JSON.stringify(rows)).toContain('"recordCount":0');
-      expect(JSON.stringify(rows)).toContain('"triggerKind":"time"');
+      const frames = currentStateFrames(await queryResponse.json());
+      const timeFrame = frames.find(
+        (frame) => frame.laneId === e2eLaneId && frame.triggerKind === "time",
+      );
+      expect(timeFrame).toMatchObject({
+        laneId: e2eLaneId,
+        triggerKind: "time",
+        recordCount: 0,
+      });
+      expect(JSON.stringify(timeFrame?.summary ?? {})).toContain(
+        e2eQuietSignalText,
+      );
     } finally {
       liveObserver.close();
     }
   });
 });
+
+interface CurrentStateFrame {
+  laneId?: string;
+  triggerKind?: string;
+  recordCount?: number;
+  summary?: unknown;
+}
+
+function currentStateFrames(body: unknown): CurrentStateFrame[] {
+  const rows = (body as { rows?: Array<{ frames?: CurrentStateFrame[] }> })
+    .rows;
+  expect(rows?.length).toBeGreaterThan(0);
+  const frames = rows?.[0]?.frames ?? [];
+  expect(frames.length).toBeGreaterThan(0);
+  return frames;
+}

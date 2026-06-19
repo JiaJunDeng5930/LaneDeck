@@ -1,7 +1,9 @@
 import {
+  parseContentBuildCompleteRequest,
   parseFrame,
   parseIngestBatch,
   parseMutationRequest,
+  type ContentBuildCompleteRequest,
   type Frame,
   type IngestBatch,
   type MutationRequest,
@@ -14,6 +16,12 @@ export const e2eEventText = "LaneDeck e2e count-triggered event";
 export const e2eQuietSignalText = "LaneDeck e2e quiet-signal event";
 export const e2ePatchedContentText = "LaneDeck e2e patched content";
 export const e2ePickId = "content.home.title";
+export const e2eContentId = "content.home";
+export const e2eContentSourcePath = "src/views.tsx";
+export const e2eContentPath = "index.html";
+export const e2eContentBuildCwd = "/workspace/lanedeck-content";
+export const e2eContentBuildCommand =
+  "corepack pnpm --filter @lanedeck/content build";
 
 const observedAt = "2026-01-01T00:00:00Z";
 
@@ -75,12 +83,59 @@ export function makePatchContentMutation(): MutationRequest {
     workspaceId: e2eWorkspaceId,
     mutation: "patch_content",
     payload: {
-      pickId: e2ePickId,
-      replacementText: e2ePatchedContentText,
+      path: e2eContentSourcePath,
+      contentPath: e2eContentPath,
+      source: `<main data-pick-id="${e2ePickId}">${e2ePatchedContentText}</main>`,
+      metadata: {
+        pickId: e2ePickId,
+        scenario: "content-mutation-flow",
+      },
     },
   };
 
   return parseMutationRequest(request);
+}
+
+export function makeRequestLocalBuildMutation(
+  contentRevision: string,
+): MutationRequest {
+  const request: MutationRequest = {
+    workspaceId: e2eWorkspaceId,
+    mutation: "request_local_build",
+    payload: {
+      machineId: e2eMachineId,
+      contentId: e2eContentId,
+      contentRevision,
+      cwd: e2eContentBuildCwd,
+      command: e2eContentBuildCommand,
+    },
+  };
+
+  return parseMutationRequest(request);
+}
+
+export function makeContentBuildCompleteRequest(
+  buildRequestId: string,
+  contentRevision: string,
+): ContentBuildCompleteRequest {
+  return parseContentBuildCompleteRequest({
+    workspaceId: e2eWorkspaceId,
+    machineId: e2eMachineId,
+    buildRequestId,
+    contentId: e2eContentId,
+    contentRevision,
+    entrypoint: e2eContentPath,
+    artifacts: [
+      {
+        path: e2eContentPath,
+        bodyBase64: Buffer.from(
+          `<!doctype html><main>${e2ePatchedContentText}</main>`,
+          "utf8",
+        ).toString("base64"),
+        contentType: "text/html; charset=utf-8",
+      },
+    ],
+  });
 }
 
 function validatedIngestBatch(batch: IngestBatch): IngestBatch {

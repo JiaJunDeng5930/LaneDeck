@@ -6,6 +6,9 @@ export interface LaneDeckE2EHarness {
   shellHttpUrl?: string;
   liveWsUrl?: string;
   agentSpoolObservationUrl?: string;
+  readToken?: string;
+  aiMutationToken?: string;
+  agentToken?: string;
 }
 
 export type HarnessCapability = keyof LaneDeckE2EHarness;
@@ -22,6 +25,9 @@ const capabilityLabels: Record<HarnessCapability, string> = {
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
+  readToken: "LANEDECK_READ_TOKEN",
+  aiMutationToken: "LANEDECK_AI_MUTATION_TOKEN",
+  agentToken: "LANEDECK_AGENT_TOKEN",
 };
 
 export function readHarnessReadiness(
@@ -69,6 +75,10 @@ export function urlWithQuery(
   return url.toString();
 }
 
+export function bearerHeaders(token: string): Record<string, string> {
+  return { authorization: `Bearer ${token}` };
+}
+
 function readHarness(): LaneDeckE2EHarness {
   const fixture = readFixtureFile();
 
@@ -83,6 +93,10 @@ function readHarness(): LaneDeckE2EHarness {
     agentSpoolObservationUrl:
       process.env.LANEDECK_AGENT_SPOOL_OBSERVATION_URL ??
       fixture.agentSpoolObservationUrl,
+    readToken: process.env.LANEDECK_READ_TOKEN ?? fixture.readToken,
+    aiMutationToken:
+      process.env.LANEDECK_AI_MUTATION_TOKEN ?? fixture.aiMutationToken,
+    agentToken: process.env.LANEDECK_AGENT_TOKEN ?? fixture.agentToken,
   };
 }
 
