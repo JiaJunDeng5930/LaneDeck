@@ -34,6 +34,15 @@ test.describe("AI content mutation to shell reload", () => {
       agentToken,
     } = readiness.harness;
 
+    await promoteE2EDashboardContent({
+      request,
+      workspaceId: workspaceId!,
+      centerHttpUrl: centerHttpUrl!,
+      shellContentArtifactWriteUrl: shellContentArtifactWriteUrl!,
+      aiMutationToken: aiMutationToken!,
+      agentToken: agentToken!,
+    });
+
     await page.goto(shellHttpUrl!);
     await waitForShellReady(page);
     const reloadObserver = await observeFirstIframeReload(page);
