@@ -47,8 +47,8 @@ export function ShellView() {
       contentLoader,
       clipboard: createNavigatorClipboardWriter(),
       onContentSession(session) {
-        if (mounted) {
-          setStatus(session.status === "ready" ? "Ready" : "Content error");
+        if (mounted && session.status !== "ready") {
+          setStatus("Content error");
         }
       },
       onPickerModeChange(enabled) {
@@ -60,11 +60,18 @@ export function ShellView() {
     let mounted = true;
     appRef.current = app;
 
-    void app.start().catch((error: unknown) => {
-      if (mounted) {
-        setStatus(error instanceof Error ? error.message : "Shell error");
-      }
-    });
+    void app
+      .start()
+      .then(() => {
+        if (mounted) {
+          setStatus("Ready");
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted) {
+          setStatus(error instanceof Error ? error.message : "Shell error");
+        }
+      });
 
     return () => {
       mounted = false;
