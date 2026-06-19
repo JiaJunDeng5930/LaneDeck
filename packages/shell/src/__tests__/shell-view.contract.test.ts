@@ -50,7 +50,7 @@ describe("ShellView visible readiness", () => {
         contentReady: true,
         liveReady: false,
       }),
-    ).toBeUndefined();
+    ).toBe("Waiting for live");
     expect(
       shellVisibleStatusForReadiness({
         startupSettled: false,

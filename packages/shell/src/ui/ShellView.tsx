@@ -27,13 +27,16 @@ export interface ShellViewReadiness {
 
 export function shellVisibleStatusForReadiness(
   readiness: ShellViewReadiness,
-): "Ready" | "Content error" | undefined {
+): "Ready" | "Waiting for live" | "Content error" | undefined {
   if (
     readiness.startupSettled &&
     readiness.contentReady &&
     readiness.liveReady
   ) {
     return "Ready";
+  }
+  if (readiness.startupSettled && readiness.contentReady) {
+    return "Waiting for live";
   }
   if (readiness.startupSettled && !readiness.contentReady) {
     return "Content error";
