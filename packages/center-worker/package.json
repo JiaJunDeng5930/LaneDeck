@@ -12,7 +12,7 @@
     "check:cloudflare": "bash ../../scripts/cloudflare-center-ci.sh",
     "preflight": "bash ../../scripts/cloudflare-center-preflight.sh",
     "deploy": "bash ../../scripts/cloudflare-center-deploy.sh",
-    "deploy:raw": "sh -c 'test -n \"${LANEDECK_CENTER_URL:-}\" || { echo \"LANEDECK_CENTER_URL is required for deploy:raw\" >&2; exit 64; }; bash ../../scripts/cloudflare-center-shell-build.sh && wrangler deploy --keep-vars'",
+    "deploy:raw": "sh -c 'test -n \"${LANEDECK_CENTER_URL:-}\" || { echo \"LANEDECK_CENTER_URL is required for deploy:raw\" >&2; exit 64; }; if [ \"${1:-}\" = \"--\" ]; then shift; fi; bash ../../scripts/cloudflare-center-shell-build.sh && wrangler deploy --keep-vars \"$@\"' --",
     "deploy:dry-run": "sh -c 'bash ../../scripts/cloudflare-center-shell-build.sh && LANEDECK_AGENT_TOKEN=dry-run-agent-token LANEDECK_AI_MUTATION_TOKEN=dry-run-ai-mutation-token LANEDECK_READ_TOKEN=dry-run-read-token wrangler deploy --dry-run --strict --outdir .wrangler-dry-run'"
   },
   "dependencies": {
