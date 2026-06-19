@@ -11,6 +11,7 @@ const capabilities = {
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
+  shellContentBaseUrl: "LANEDECK_SHELL_CONTENT_BASE_URL",
   shellContentArtifactWriteUrl: "LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
@@ -30,6 +31,12 @@ const missing = required
 if (missing.length > 0) {
   console.error(`LaneDeck full e2e harness requires ${missing.join(", ")}.`);
   process.exit(1);
+}
+
+if (required.includes("shellContentBaseUrl")) {
+  validateShellContentBaseUrl(
+    process.env.LANEDECK_SHELL_CONTENT_BASE_URL ?? fixture.shellContentBaseUrl,
+  );
 }
 
 function readFixture() {
@@ -53,6 +60,7 @@ function requiredCapabilities(args) {
       required.add("agentSourceInputUrl");
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
+      required.add("shellContentBaseUrl");
       required.add("liveWsUrl");
       required.add("agentSpoolObservationUrl");
       required.add("readToken");
@@ -61,6 +69,7 @@ function requiredCapabilities(args) {
     if (spec.includes("content-mutation-flow")) {
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
+      required.add("shellContentBaseUrl");
       required.add("shellContentArtifactWriteUrl");
       required.add("aiMutationToken");
       required.add("agentToken");
@@ -68,6 +77,20 @@ function requiredCapabilities(args) {
   }
 
   return required.size > 0 ? [...required] : Object.keys(capabilities);
+}
+
+function validateShellContentBaseUrl(value) {
+  const url = new URL(value);
+  if (
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.hostname === "lanedeck.localhost"
+  ) {
+    return;
+  }
+  console.error(
+    "LANEDECK_SHELL_CONTENT_BASE_URL must be an http(s) URL on lanedeck.localhost so shell can share center read access with trusted e2e content.",
+  );
+  process.exit(1);
 }
 
 function isSpecSelector(arg) {

@@ -4,6 +4,7 @@ export interface LaneDeckE2EHarness {
   agentSourceInputUrl?: string;
   centerHttpUrl?: string;
   shellHttpUrl?: string;
+  shellContentBaseUrl?: string;
   shellContentArtifactWriteUrl?: string;
   liveWsUrl?: string;
   agentSpoolObservationUrl?: string;
@@ -24,6 +25,7 @@ const capabilityLabels: Record<HarnessCapability, string> = {
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
+  shellContentBaseUrl: "LANEDECK_SHELL_CONTENT_BASE_URL",
   shellContentArtifactWriteUrl: "LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL",
   liveWsUrl: "LANEDECK_LIVE_WS_URL",
   agentSpoolObservationUrl: "LANEDECK_AGENT_SPOOL_OBSERVATION_URL",
@@ -53,6 +55,9 @@ export function readHarnessReadiness(
         .map((capability) => capabilityLabels[capability])
         .join(", ")}.`,
     );
+  }
+  if (required.includes("shellContentBaseUrl")) {
+    validateShellContentBaseUrl(harness.shellContentBaseUrl);
   }
 
   return {
@@ -91,6 +96,9 @@ function readHarness(): LaneDeckE2EHarness {
     centerHttpUrl:
       process.env.LANEDECK_CENTER_HTTP_URL ?? fixture.centerHttpUrl,
     shellHttpUrl: process.env.LANEDECK_SHELL_HTTP_URL ?? fixture.shellHttpUrl,
+    shellContentBaseUrl:
+      process.env.LANEDECK_SHELL_CONTENT_BASE_URL ??
+      fixture.shellContentBaseUrl,
     shellContentArtifactWriteUrl:
       process.env.LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL ??
       fixture.shellContentArtifactWriteUrl,
@@ -116,4 +124,20 @@ function readFixtureFile(): LaneDeckE2EHarness {
 
 function withTrailingSlash(baseUrl: string): string {
   return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+}
+
+function validateShellContentBaseUrl(value: string | undefined): void {
+  if (value === undefined) {
+    return;
+  }
+  const url = new URL(value);
+  if (
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.hostname === "lanedeck.localhost"
+  ) {
+    return;
+  }
+  throw new Error(
+    "LANEDECK_SHELL_CONTENT_BASE_URL must be an http(s) URL on lanedeck.localhost so shell can share center read access with trusted e2e content.",
+  );
 }

@@ -48,6 +48,31 @@ describe("center clients", () => {
     );
   });
 
+  it("derives explicit HTTP content uris from a configured content base url", async () => {
+    const client = createHttpCenterClient({
+      baseUrl: "https://center.example",
+      workspaceId: "workspace.local",
+      contentBaseUrl: "http://lanedeck.localhost:4174/content/",
+      fetch: async () =>
+        jsonResponse({
+          rows: [
+            {
+              revision: "rev-1",
+              contentPath: "dashboards/home.html",
+            },
+          ],
+          diagnostics: [],
+        }),
+    });
+
+    await expect(client.getCurrentContent()).resolves.toMatchObject({
+      workspaceId: "workspace.local",
+      revision: "rev-1",
+      path: "dashboards/home.html",
+      uri: "http://lanedeck.localhost:4174/content/workspace.local/rev-1/dashboards/home.html",
+    });
+  });
+
   it("decodes browser live events with stable mutation ids", async () => {
     const events: BrowserLiveEvent[] = [];
     const diagnostics: Diagnostic[] = [];

@@ -19,6 +19,7 @@ import {
 const readiness = readHarnessReadiness([
   "centerHttpUrl",
   "shellHttpUrl",
+  "shellContentBaseUrl",
   "shellContentArtifactWriteUrl",
   "aiMutationToken",
   "agentToken",

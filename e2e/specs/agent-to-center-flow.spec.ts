@@ -23,6 +23,7 @@ const readiness = readHarnessReadiness([
   "agentSourceInputUrl",
   "centerHttpUrl",
   "shellHttpUrl",
+  "shellContentBaseUrl",
   "liveWsUrl",
   "agentSpoolObservationUrl",
   "readToken",

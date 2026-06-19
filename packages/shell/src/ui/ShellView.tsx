@@ -18,6 +18,7 @@ const centerBaseUrl =
 const workspaceId =
   import.meta.env.VITE_LANEDECK_WORKSPACE_ID ?? "workspace.local";
 const readToken = import.meta.env.VITE_LANEDECK_READ_TOKEN ?? "";
+const contentBaseUrl = import.meta.env.VITE_LANEDECK_CONTENT_BASE_URL ?? "";
 
 export interface ShellViewReadiness {
   contentReady: boolean;
@@ -72,6 +73,7 @@ export function ShellView() {
       baseUrl: centerBaseUrl,
       workspaceId,
       readToken,
+      contentBaseUrl,
       reportProtocolDiagnostic: createBrowserDiagnosticReporter(),
     });
     const live = createWebSocketLiveClient({

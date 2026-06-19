@@ -29,6 +29,10 @@ export interface CenterQueryAccess {
   readToken?: string;
 }
 
+interface CurrentContentDescriptorOptions extends CenterQueryAccess {
+  contentBaseUrl?: string;
+}
+
 export interface CenterQueryClient {
   getCurrentContent(): Promise<CurrentContentDescriptor>;
   recordProtocolDiagnostic(record: ProtocolDiagnosticRecord): Promise<void>;
@@ -68,6 +72,7 @@ export interface HttpCenterClientOptions {
   baseUrl: string;
   workspaceId: string;
   readToken?: string;
+  contentBaseUrl?: string;
   fetch?: typeof fetch;
   reportProtocolDiagnostic?: (
     record: ProtocolDiagnosticRecord,
@@ -138,6 +143,10 @@ export function createHttpCenterClient(
       }
       return descriptorFromRow(options.workspaceId, row, {
         queryUrl,
+        ...(options.contentBaseUrl === undefined ||
+        options.contentBaseUrl.trim() === ""
+          ? {}
+          : { contentBaseUrl: options.contentBaseUrl }),
         ...(options.readToken === undefined || options.readToken.trim() === ""
           ? {}
           : { readToken: options.readToken }),
@@ -273,7 +282,7 @@ export function centerLiveUrl(
 function descriptorFromRow(
   workspaceId: string,
   row: JsonObject,
-  access?: CenterQueryAccess,
+  access?: CurrentContentDescriptorOptions,
 ): CurrentContentDescriptor {
   const revision = readAliasedString(row, [
     ["revision", "revision"],
@@ -284,7 +293,9 @@ function descriptorFromRow(
       ["contentPath", "contentPath"],
       ["path", "path"],
     ]) ?? "index.html";
-  const uri = readOptionalString(row.uri, "uri");
+  const uri =
+    readOptionalString(row.uri, "uri") ??
+    contentUriFromBaseUrl(access?.contentBaseUrl, workspaceId, revision, path);
   return {
     workspaceId,
     revision,
@@ -299,6 +310,22 @@ function descriptorFromRow(
             : { centerReadToken: access.readToken }),
         }),
   };
+}
+
+function contentUriFromBaseUrl(
+  contentBaseUrl: string | undefined,
+  workspaceId: string,
+  revision: string,
+  path: string,
+): string | undefined {
+  if (contentBaseUrl === undefined || contentBaseUrl.trim() === "") {
+    return undefined;
+  }
+  const baseUrl = contentBaseUrl.trim();
+  const contentPath = [workspaceId, revision, ...path.split("/")]
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return new URL(contentPath, normalizeBaseUrl(baseUrl)).toString();
 }
 
 async function postJson<T>(
