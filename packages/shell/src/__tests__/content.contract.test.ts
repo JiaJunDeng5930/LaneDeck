@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   contentUriFor,
+  createIframeHost,
   createIframeContentLoader,
   type ContentFrameHost,
   type ContentHostState,
@@ -32,6 +33,49 @@ describe("content iframe loading", () => {
     expect(host.sources).toEqual([
       "lanedeck://content/workspace.local/rev-1/dashboards/home.html",
     ]);
+  });
+
+  it("posts lanedeck iframe messages to the strict source origin", () => {
+    const postMessage = vi.fn();
+    const iframe = testIframe(postMessage);
+    const host = createIframeHost(iframe);
+    const message: ShellToContentMessage = {
+      type: "host_state",
+      payload: { hostState: bootstrapHostState(false) },
+    };
+
+    host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
+    host.postMessage(message);
+
+    expect(postMessage).toHaveBeenCalledWith(message, "lanedeck://content");
+    expect(postMessage.mock.calls[0]?.[1]).not.toBe("*");
+  });
+
+  it.each([
+    [
+      "https",
+      "https://content.example.test/workspace.local/rev-1/index.html",
+      "https://content.example.test",
+    ],
+    [
+      "http",
+      "http://localhost:4173/workspace.local/rev-1/index.html",
+      "http://localhost:4173",
+    ],
+  ])("posts %s iframe messages to URL.origin", (_scheme, uri, origin) => {
+    const postMessage = vi.fn();
+    const iframe = testIframe(postMessage);
+    const host = createIframeHost(iframe);
+    const message: ShellToContentMessage = {
+      type: "host_state",
+      payload: { hostState: bootstrapHostState(true) },
+    };
+
+    host.setSource(uri);
+    host.postMessage(message);
+
+    expect(postMessage).toHaveBeenCalledWith(message, origin);
+    expect(postMessage.mock.calls[0]?.[1]).not.toBe("*");
   });
 
   it("sends bootstrap init before load and full host state after load", async () => {
@@ -490,6 +534,17 @@ function createTimedIframeContentLoader(
       options: { loadTimeoutMs: number },
     ) => ContentLoader
   )(host, options);
+}
+
+function testIframe(postMessage: ReturnType<typeof vi.fn>): HTMLIFrameElement {
+  return {
+    src: "",
+    contentWindow: { postMessage },
+    style: {},
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    removeAttribute: vi.fn(),
+  } as unknown as HTMLIFrameElement;
 }
 
 class FakeFrameHost implements ContentFrameHost {

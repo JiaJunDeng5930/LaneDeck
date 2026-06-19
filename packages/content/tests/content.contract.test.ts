@@ -340,6 +340,60 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("clears the previous read token when full host state changes query URL without a token", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          rows: [
+            {
+              laneId: "lane.public",
+              eventText: "public center render",
+            },
+          ],
+          diagnostics: [],
+        }),
+    );
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        centerQueryUrl: "https://trusted-center.example.test/api/query",
+        centerReadToken: "old-read-token",
+      } as ShellHostState & { centerReadToken: string },
+    });
+    const app = createContentApp({
+      query: createHttpCenterQueryClient({ fetch }),
+      shell,
+    });
+
+    await app.init();
+    shell.updateHostState({
+      pickerEnabled: false,
+      centerQueryUrl: "https://public-center.example.test/api/query",
+      route: {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+        laneId: "lane.public",
+      },
+    });
+    await drainAsyncWork();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://public-center.example.test/api/query",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const publicQuery = fetch.mock.calls[0]?.[1];
+    expect(JSON.parse(String(publicQuery?.body))).toEqual({
+      workspaceId: "workspace.local",
+      query: "current_state",
+      params: { laneId: "lane.public" },
+    });
+    expect((publicQuery?.headers as Headers).get("authorization")).toBeNull();
+    expect(document.root.innerHTML).toContain("public center render");
+    app.dispose();
+  });
+
   it("rerenders the same route when full host state restores query access after an initial failure", async () => {
     const document = new TestDocument();
     vi.stubGlobal("document", document as unknown as Document);
