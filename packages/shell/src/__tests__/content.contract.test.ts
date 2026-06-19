@@ -145,6 +145,47 @@ describe("content iframe loading", () => {
     expect(host.heights).toEqual([240.2]);
   });
 
+  it("keeps the previous ready session active when replacement setSource fails", async () => {
+    const host = new FakeFrameHost();
+    const loader = createIframeContentLoader(host);
+    await loadReady(
+      loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-1",
+          path: "index.html",
+        },
+        hostState(false, "rev-1"),
+      ),
+      host,
+    );
+    host.messages.length = 0;
+    host.heights.length = 0;
+
+    host.throwOnNextSetSource(new Error("replacement source failed"));
+    const replacement = await loader.loadCurrent(
+      {
+        workspaceId: "workspace.local",
+        revision: "rev-2",
+        path: "index.html",
+      },
+      hostState(false, "rev-2"),
+    );
+
+    expect(replacement).toMatchObject({ status: "error" });
+
+    loader.setPickerMode(true);
+    loader.setHeight(360);
+
+    expect(host.messages).toEqual([
+      {
+        type: "host_state",
+        payload: { hostState: hostState(true, "rev-1") },
+      },
+    ]);
+    expect(host.heights).toEqual([360]);
+  });
+
   it("forwards height changes to the active frame", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
@@ -199,11 +240,14 @@ function descriptorWithHostState(): HostStateDescriptor {
   };
 }
 
-function hostState(pickerEnabled: boolean): ContentHostState {
+function hostState(
+  pickerEnabled: boolean,
+  contentRevision = "rev-1",
+): ContentHostState {
   return {
     pickerEnabled,
     workspaceId: "workspace.local",
-    contentRevision: "rev-1",
+    contentRevision,
     centerQueryUrl: "https://center.example.test/api/query",
     centerReadToken: "read-token",
     route: {
@@ -227,8 +271,14 @@ class FakeFrameHost implements ContentFrameHost {
   readonly messages: unknown[] = [];
   readonly heights: number[] = [];
   private loadResolver: (() => void) | undefined;
+  private nextSetSourceError: Error | undefined;
 
   setSource(uri: string): void {
+    if (this.nextSetSourceError !== undefined) {
+      const error = this.nextSetSourceError;
+      this.nextSetSourceError = undefined;
+      throw error;
+    }
     this.sources.push(uri);
   }
 
@@ -244,6 +294,10 @@ class FakeFrameHost implements ContentFrameHost {
 
   completeLoad(): void {
     this.loadResolver?.();
+  }
+
+  throwOnNextSetSource(error: Error): void {
+    this.nextSetSourceError = error;
   }
 
   setHeight(height: number): void {
