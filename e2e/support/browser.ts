@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 type WindowWithLaneDeckE2E = Window & {
   __lanedeckE2eIframeReloadCount?: number;
@@ -6,6 +6,10 @@ type WindowWithLaneDeckE2E = Window & {
 
 export interface IframeReloadObserver {
   waitForNextReload(): Promise<void>;
+}
+
+export async function waitForShellReady(page: Page): Promise<void> {
+  await expect(page.locator(".shell-toolbar p")).toHaveText("Ready");
 }
 
 export async function observeFirstIframeReload(

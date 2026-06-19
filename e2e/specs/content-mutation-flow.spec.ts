@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-import { observeFirstIframeReload } from "../support/browser";
+import {
+  observeFirstIframeReload,
+  waitForShellReady,
+} from "../support/browser";
 import {
   e2ePatchedContentText,
   makeContentBuildCompleteRequest,
@@ -32,6 +35,7 @@ test.describe("AI content mutation to shell reload", () => {
       readiness.harness;
 
     await page.goto(shellHttpUrl!);
+    await waitForShellReady(page);
     const reloadObserver = await observeFirstIframeReload(page);
 
     const mutationResponse = await request.post(
