@@ -44,7 +44,9 @@ test.describe("agent ingest to dashboard", () => {
       readToken,
     } = readiness.harness;
 
-    const liveObserver = await connectJsonMessageObserver(liveWsUrl!);
+    const liveObserver = await connectJsonMessageObserver(
+      urlWithQuery(liveWsUrl!, { readToken: readToken! }),
+    );
 
     try {
       const agentResponse = await request.post(agentSourceInputUrl!, {
@@ -88,9 +90,13 @@ test.describe("agent ingest to dashboard", () => {
       expect(queryResponse.ok()).toBe(true);
       const frames = currentStateFrames(await queryResponse.json());
       const countFrame = frames.find(
-        (frame) => frame.laneId === e2eLaneId && frame.triggerKind === "count",
+        (frame) =>
+          frame.batchId === agentRun.batchId &&
+          frame.laneId === e2eLaneId &&
+          frame.triggerKind === "count",
       );
       expect(countFrame).toMatchObject({
+        batchId: agentRun.batchId,
         laneId: e2eLaneId,
         triggerKind: "count",
         recordCount: 1,
@@ -111,7 +117,9 @@ test.describe("agent ingest to dashboard", () => {
     const { agentSourceInputUrl, centerHttpUrl, liveWsUrl, readToken } =
       readiness.harness;
 
-    const liveObserver = await connectJsonMessageObserver(liveWsUrl!);
+    const liveObserver = await connectJsonMessageObserver(
+      urlWithQuery(liveWsUrl!, { readToken: readToken! }),
+    );
 
     try {
       const agentResponse = await request.post(agentSourceInputUrl!, {
@@ -145,9 +153,13 @@ test.describe("agent ingest to dashboard", () => {
 
       const frames = currentStateFrames(await queryResponse.json());
       const timeFrame = frames.find(
-        (frame) => frame.laneId === e2eLaneId && frame.triggerKind === "time",
+        (frame) =>
+          frame.batchId === agentRun.batchId &&
+          frame.laneId === e2eLaneId &&
+          frame.triggerKind === "time",
       );
       expect(timeFrame).toMatchObject({
+        batchId: agentRun.batchId,
         laneId: e2eLaneId,
         triggerKind: "time",
         recordCount: 0,
@@ -162,6 +174,7 @@ test.describe("agent ingest to dashboard", () => {
 });
 
 interface CurrentStateFrame {
+  batchId?: string;
   laneId?: string;
   triggerKind?: string;
   recordCount?: number;
