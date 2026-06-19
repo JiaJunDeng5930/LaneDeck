@@ -15,12 +15,13 @@ require_command() {
 
 require_command corepack
 
-corepack pnpm --filter @lanedeck/shell build
+bash "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh"
 
 bash -n \
   "$ROOT_DIR/scripts/cloudflare-center-ci.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-deploy.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-preflight.sh" \
+  "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-verify.sh" \
   "$ROOT_DIR/scripts/e2e.sh"
 

@@ -55,7 +55,7 @@ classify_r2_failure() {
 require_command corepack
 require_command jq
 
-corepack pnpm --filter @lanedeck/shell build
+bash "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh"
 
 cd "$WORKER_DIR"
 

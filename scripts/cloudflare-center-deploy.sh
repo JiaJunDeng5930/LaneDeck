@@ -85,16 +85,7 @@ require_command corepack
 require_command jq
 require_env
 
-CENTER_URL="${LANEDECK_CENTER_URL%/}"
-CONTENT_BASE_URL="${LANEDECK_CONTENT_BASE_URL:-$CENTER_URL/content-by-workspace/}"
-CONTENT_BASE_URL="${CONTENT_BASE_URL%/}/"
-
-export VITE_LANEDECK_CENTER_URL="$CENTER_URL"
-export VITE_LANEDECK_CONTENT_BASE_URL="$CONTENT_BASE_URL"
-export VITE_LANEDECK_WORKSPACE_ID="${LANEDECK_WORKSPACE_ID:-workspace.local}"
-unset VITE_LANEDECK_READ_TOKEN
-
-corepack pnpm --filter @lanedeck/shell build
+bash "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh"
 
 cd "$WORKER_DIR"
 
