@@ -166,7 +166,7 @@ export function createIframeContentLoader(
         const hostState = updateSessionPickerMode(activeSession, enabled);
         activeSession.postMessage({
           type: "host_state",
-          payload: { hostState },
+          payload: { hostState: bootstrapHostState(hostState) },
         });
       }
       if (pendingSession !== undefined && pendingSession !== activeSession) {

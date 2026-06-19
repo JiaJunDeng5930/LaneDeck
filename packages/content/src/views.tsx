@@ -23,7 +23,7 @@ export function renderDashboardMarkup(
   route: ContentRoute,
   response: QueryResponse,
 ): RenderedDashboard {
-  const rows = dashboardRows(response);
+  const rows = dashboardRows(route, response);
   const title =
     route.view === "dashboard" ? "Dashboard" : (route.title ?? route.query);
   const pickIds = [
@@ -107,22 +107,36 @@ export function renderErrorMarkup(message: string, detail?: string): string {
   );
 }
 
-function dashboardRows(response: QueryResponse): DashboardRow[] {
+function dashboardRows(
+  route: ContentRoute,
+  response: QueryResponse,
+): DashboardRow[] {
   const rows: DashboardRow[] = [];
+  const laneFilter = route.view === "dashboard" ? route.laneId : undefined;
   for (const [rowIndex, row] of response.rows.entries()) {
     const frames = jsonArray(row.frames);
     if (frames === undefined) {
+      if (!matchesLaneFilter(row, laneFilter)) {
+        continue;
+      }
       rows.push(toDashboardRow(row, rowIndex));
       continue;
     }
 
     for (const [frameIndex, frame] of frames.entries()) {
-      if (isJsonObject(frame)) {
+      if (isJsonObject(frame) && matchesLaneFilter(frame, laneFilter)) {
         rows.push(toFrameDashboardRow(frame, rowIndex, frameIndex));
       }
     }
   }
   return rows.slice(0, 100);
+}
+
+function matchesLaneFilter(
+  row: JsonObject,
+  laneFilter: string | undefined,
+): boolean {
+  return laneFilter === undefined || scalarString(row.laneId) === laneFilter;
 }
 
 function toDashboardRow(row: JsonObject, index: number): DashboardRow {
