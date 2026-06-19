@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ContentError, createHttpCenterQueryClient } from "../src/index";
+import {
+  ContentError,
+  createHttpCenterQueryClient,
+  type CenterQueryClient,
+} from "../src/index";
 
 describe("center query client", () => {
   it("posts query requests to the center query API", async () => {
@@ -62,6 +66,31 @@ describe("center query client", () => {
         params: {},
       }),
     ).rejects.toBeInstanceOf(ContentError);
+  });
+
+  it("applies read tokens supplied after construction", async () => {
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({ rows: [], diagnostics: [] }),
+    );
+    const client = createHttpCenterQueryClient({
+      queryUrl: "https://center.example.test/api/query",
+      fetch,
+    }) as CenterQueryClient & {
+      setReadToken?: (readToken: string) => void;
+    };
+
+    client.setReadToken?.("shell-read-token");
+    await client.query({
+      workspaceId: "workspace.local",
+      query: "dashboard",
+      params: {},
+    });
+
+    const init = fetch.mock.calls[0]?.[1];
+    expect((init?.headers as Headers).get("authorization")).toBe(
+      "Bearer shell-read-token",
+    );
   });
 
   it("requires the shell-provided center query URL before querying", async () => {

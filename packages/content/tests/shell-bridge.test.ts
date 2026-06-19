@@ -4,6 +4,7 @@ import {
   ContentError,
   createWindowShellBridge,
   parseContentRoute,
+  parseShellHostStateMessage,
   parseShellInitMessage,
 } from "../src/index";
 
@@ -39,6 +40,7 @@ describe("window shell bridge", () => {
           hostState: {
             pickerEnabled: true,
             centerQueryUrl: "https://center.example.test/api/query",
+            centerReadToken: "shell-read-token",
           },
         },
       },
@@ -50,6 +52,7 @@ describe("window shell bridge", () => {
       hostState: {
         pickerEnabled: true,
         centerQueryUrl: "https://center.example.test/api/query",
+        centerReadToken: "shell-read-token",
       },
     });
   });
@@ -80,6 +83,7 @@ describe("window shell bridge", () => {
           hostState: {
             pickerEnabled: true,
             centerQueryUrl: "https://center.example.test/api/query",
+            centerReadToken: "shell-read-token",
           },
         },
       },
@@ -91,6 +95,7 @@ describe("window shell bridge", () => {
       {
         pickerEnabled: true,
         centerQueryUrl: "https://center.example.test/api/query",
+        centerReadToken: "shell-read-token",
       },
     ]);
 
@@ -111,6 +116,22 @@ describe("window shell bridge", () => {
       parseShellInitMessage({
         type: "init",
         payload: { hostState: { pickerEnabled: "true" } },
+      }),
+    ).toThrow(ContentError);
+  });
+
+  it("rejects non-string center read tokens", () => {
+    expect(() =>
+      parseShellInitMessage({
+        type: "init",
+        payload: { hostState: { pickerEnabled: true, centerReadToken: 42 } },
+      }),
+    ).toThrow(ContentError);
+
+    expect(() =>
+      parseShellHostStateMessage({
+        type: "host_state",
+        payload: { hostState: { pickerEnabled: true, centerReadToken: 42 } },
       }),
     ).toThrow(ContentError);
   });

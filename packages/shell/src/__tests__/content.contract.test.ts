@@ -4,21 +4,25 @@ import {
   contentUriFor,
   createIframeContentLoader,
   type ContentFrameHost,
+  type ContentSession,
   type ShellToContentMessage,
 } from "../content";
+import type { CurrentContentDescriptor } from "../center";
 
 describe("content iframe loading", () => {
   it("loads content through the lanedeck custom protocol", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
 
-    const session = await loader.loadCurrent({
+    const session = loader.loadCurrent({
       workspaceId: "workspace.local",
       revision: "rev-1",
       path: "dashboards/home.html",
     });
 
-    expect(session).toMatchObject({
+    host.completeLoad();
+
+    await expect(session).resolves.toMatchObject({
       status: "ready",
       revision: "rev-1",
       reloadCount: 1,
@@ -28,21 +32,105 @@ describe("content iframe loading", () => {
     ]);
   });
 
-  it("forwards picker mode and height changes to the active frame", async () => {
+  it("sends init with host state after the iframe load event", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
-    await loader.loadCurrent({
-      workspaceId: "workspace.local",
+    const descriptor = descriptorWithHostState();
+
+    const session = loader.loadCurrent(descriptor);
+    await Promise.resolve();
+
+    expect(host.messages).toEqual([]);
+
+    host.completeLoad();
+
+    await expect(session).resolves.toMatchObject({
+      status: "ready",
       revision: "rev-1",
-      path: "index.html",
+      reloadCount: 1,
     });
+    expect(host.messages).toEqual([
+      {
+        type: "init",
+        payload: {
+          hostState: {
+            pickerEnabled: false,
+            workspaceId: "workspace.local",
+            contentRevision: "rev-1",
+            centerQueryUrl: "https://center.example.test/api/query",
+            centerReadToken: "read-token",
+            route: {
+              view: "dashboard",
+              workspaceId: "workspace.local",
+              laneId: "lane.build",
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("forwards picker mode as host state and height changes to the active frame", async () => {
+    const host = new FakeFrameHost();
+    const loader = createIframeContentLoader(host);
+    await loadReady(loader.loadCurrent(descriptorWithHostState()), host);
 
     loader.setPickerMode(true);
     loader.setHeight(240.2);
 
     expect(host.messages).toEqual([
-      { type: "picker_mode", payload: { enabled: true } },
+      {
+        type: "init",
+        payload: {
+          hostState: {
+            pickerEnabled: false,
+            workspaceId: "workspace.local",
+            contentRevision: "rev-1",
+            centerQueryUrl: "https://center.example.test/api/query",
+            centerReadToken: "read-token",
+            route: {
+              view: "dashboard",
+              workspaceId: "workspace.local",
+              laneId: "lane.build",
+            },
+          },
+        },
+      },
+      {
+        type: "host_state",
+        payload: {
+          hostState: {
+            pickerEnabled: true,
+            workspaceId: "workspace.local",
+            contentRevision: "rev-1",
+            centerQueryUrl: "https://center.example.test/api/query",
+            centerReadToken: "read-token",
+            route: {
+              view: "dashboard",
+              workspaceId: "workspace.local",
+              laneId: "lane.build",
+            },
+          },
+        },
+      },
     ]);
+    expect(host.heights).toEqual([240.2]);
+  });
+
+  it("forwards height changes to the active frame", async () => {
+    const host = new FakeFrameHost();
+    const loader = createIframeContentLoader(host);
+    await loadReady(
+      loader.loadCurrent({
+        workspaceId: "workspace.local",
+        revision: "rev-1",
+        path: "index.html",
+      }),
+      host,
+    );
+
+    loader.setHeight(240.2);
+
     expect(host.heights).toEqual([240.2]);
   });
 
@@ -58,10 +146,44 @@ describe("content iframe loading", () => {
   });
 });
 
+type HostStateDescriptor = CurrentContentDescriptor & {
+  centerQueryUrl: string;
+  centerReadToken: string;
+  route: {
+    view: "dashboard";
+    workspaceId: string;
+    laneId: string;
+  };
+};
+
+function descriptorWithHostState(): HostStateDescriptor {
+  return {
+    workspaceId: "workspace.local",
+    revision: "rev-1",
+    path: "index.html",
+    centerQueryUrl: "https://center.example.test/api/query",
+    centerReadToken: "read-token",
+    route: {
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.build",
+    },
+  };
+}
+
+async function loadReady(
+  session: Promise<ContentSession>,
+  host: FakeFrameHost,
+): Promise<void> {
+  host.completeLoad();
+  await expect(session).resolves.toMatchObject({ status: "ready" });
+}
+
 class FakeFrameHost implements ContentFrameHost {
   readonly sources: string[] = [];
-  readonly messages: ShellToContentMessage[] = [];
+  readonly messages: unknown[] = [];
   readonly heights: number[] = [];
+  private loadResolver: (() => void) | undefined;
 
   setSource(uri: string): void {
     this.sources.push(uri);
@@ -69,6 +191,16 @@ class FakeFrameHost implements ContentFrameHost {
 
   postMessage(message: ShellToContentMessage): void {
     this.messages.push(message);
+  }
+
+  waitForLoad(): Promise<void> {
+    return new Promise((resolve) => {
+      this.loadResolver = resolve;
+    });
+  }
+
+  completeLoad(): void {
+    this.loadResolver?.();
   }
 
   setHeight(height: number): void {

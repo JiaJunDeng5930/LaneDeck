@@ -79,7 +79,7 @@ describe("content package contract", () => {
     app.dispose();
   });
 
-  it("uses the shell-provided center query URL for initial dashboard render", async () => {
+  it("uses the shell-provided center query URL and read token for initial dashboard render", async () => {
     const document = new TestDocument();
     vi.stubGlobal("document", document as unknown as Document);
     const fetch = vi.fn(
@@ -93,8 +93,9 @@ describe("content package contract", () => {
       hostState: {
         pickerEnabled: false,
         centerQueryUrl: "https://center.example.test/api/query",
+        centerReadToken: "shell-read-token",
         route: { view: "dashboard", workspaceId: "workspace.local" },
-      },
+      } as ShellHostState & { centerReadToken: string },
     });
     const app = createContentApp({
       query: createHttpCenterQueryClient({ fetch }),
@@ -106,6 +107,10 @@ describe("content package contract", () => {
     expect(fetch).toHaveBeenCalledWith(
       "https://center.example.test/api/query",
       expect.objectContaining({ method: "POST" }),
+    );
+    const init = fetch.mock.calls[0]?.[1];
+    expect((init?.headers as Headers).get("authorization")).toBe(
+      "Bearer shell-read-token",
     );
     expect(document.root.innerHTML).toContain("shell boot render");
     app.dispose();

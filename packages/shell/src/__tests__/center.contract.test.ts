@@ -35,6 +35,8 @@ describe("center clients", () => {
       workspaceId: "workspace.local",
       revision: "rev-1",
       path: "dashboards/home.html",
+      centerQueryUrl: "https://center.example/api/query",
+      centerReadToken: "read-token",
     });
     expect(JSON.parse(String(calls[0]?.body))).toEqual({
       workspaceId: "workspace.local",
