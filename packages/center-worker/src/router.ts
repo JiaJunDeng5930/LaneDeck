@@ -22,6 +22,8 @@ import {
 
 import type { CenterWorkerEnv, WorkspaceRpcResult } from "./runtime-types";
 
+const READ_SESSION_COOKIE = "LaneDeckReadSession";
+
 export async function handleRequest(
   request: Request,
   env: CenterWorkerEnv,
@@ -100,7 +102,7 @@ async function routeRequest(
   }
 
   if (request.method === "POST" && url.pathname === "/api/query") {
-    await requireBearerToken(request, env.LANEDECK_READ_TOKEN);
+    await requireReadToken(request, env.LANEDECK_READ_TOKEN);
     const query = parseQueryRequest(await readJson(request));
     validateQueryRequestName(query);
     return jsonResponse(await workspace(env, query.workspaceId).query(query));
@@ -134,7 +136,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/content/current") {
-    await requireBearerToken(request, env.LANEDECK_READ_TOKEN);
+    await requireReadToken(request, env.LANEDECK_READ_TOKEN);
     const workspaceId = requiredWorkspaceId(url);
     return jsonResponse(
       await workspace(env, workspaceId).query({
@@ -170,6 +172,10 @@ async function routeRequest(
     );
   }
 
+  if (request.method === "GET" && url.searchParams.has("readToken")) {
+    return await establishReadSession(request, url, env.LANEDECK_READ_TOKEN);
+  }
+
   if (request.method === "GET") {
     return await readShellAsset(request, env);
   }
@@ -194,6 +200,37 @@ async function readShellAsset(
   }
 
   return await env.ASSETS.fetch(request);
+}
+
+async function establishReadSession(
+  request: Request,
+  url: URL,
+  expectedToken: string | undefined,
+): Promise<Response> {
+  if (expectedToken === undefined || expectedToken.length === 0) {
+    throw new ApiError(500, "authentication_not_configured", [
+      {
+        path: "readToken",
+        message: "expected configured bearer token",
+      },
+    ]);
+  }
+
+  const suppliedToken = url.searchParams.get("readToken");
+  if (!(await secretEquals(suppliedToken, expectedToken))) {
+    throw authenticationFailed();
+  }
+
+  const redirectUrl = new URL(request.url);
+  redirectUrl.searchParams.delete("readToken");
+  const headers = new Headers({
+    location: redirectUrl.toString(),
+  });
+  headers.append(
+    "set-cookie",
+    `${READ_SESSION_COOKIE}=${encodeURIComponent(expectedToken)}; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+  return new Response(null, { status: 302, headers });
 }
 
 async function readContentAsset(
@@ -333,6 +370,34 @@ async function requireBearerToken(
   throw authenticationFailed();
 }
 
+async function requireReadToken(
+  request: Request,
+  expectedToken: string | undefined,
+): Promise<void> {
+  if (expectedToken === undefined || expectedToken.length === 0) {
+    throw new ApiError(500, "authentication_not_configured", [
+      {
+        path: "authorization",
+        message: "expected configured bearer token",
+      },
+    ]);
+  }
+
+  const [bearerMatches, cookieMatches] = await Promise.all([
+    secretEquals(
+      request.headers.get("authorization"),
+      `Bearer ${expectedToken}`,
+    ),
+    secretEquals(readSessionCookie(request), expectedToken),
+  ]);
+
+  if (bearerMatches || cookieMatches) {
+    return;
+  }
+
+  throw authenticationFailed();
+}
+
 async function requireBrowserReadToken(
   request: Request,
   url: URL,
@@ -347,19 +412,41 @@ async function requireBrowserReadToken(
     ]);
   }
 
-  const [bearerMatches, queryMatches] = await Promise.all([
+  const [bearerMatches, queryMatches, cookieMatches] = await Promise.all([
     secretEquals(
       request.headers.get("authorization"),
       `Bearer ${expectedToken}`,
     ),
     secretEquals(url.searchParams.get("readToken"), expectedToken),
+    secretEquals(readSessionCookie(request), expectedToken),
   ]);
 
-  if (bearerMatches || queryMatches) {
+  if (bearerMatches || queryMatches || cookieMatches) {
     return;
   }
 
   throw authenticationFailed();
+}
+
+function readSessionCookie(request: Request): string | null {
+  const cookieHeader = request.headers.get("cookie");
+  if (cookieHeader === null) {
+    return null;
+  }
+
+  for (const pair of cookieHeader.split(";")) {
+    const [name, ...valueParts] = pair.trim().split("=");
+    if (name !== READ_SESSION_COOKIE) {
+      continue;
+    }
+    try {
+      return decodeURIComponent(valueParts.join("="));
+    } catch {
+      return "";
+    }
+  }
+
+  return null;
 }
 
 async function secretEquals(

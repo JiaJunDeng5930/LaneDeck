@@ -66,6 +66,98 @@ const validLaneConfig = {
 } satisfies LaneConfig;
 
 describe("center-worker contract", () => {
+  it("establishes a browser read session without serving shell assets", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/?readToken=read-token&view=home"),
+      {
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      },
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "https://center.local/?view=home",
+    );
+    expect(response.headers.get("set-cookie")).toContain(
+      "LaneDeckReadSession=read-token",
+    );
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(response.headers.get("set-cookie")).toContain("Secure");
+    expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(assetsFetched).toBe(false);
+  });
+
+  it("rejects invalid browser read session credentials before shell assets", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/?readToken=wrong-token"),
+      {
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      },
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "authentication_failed",
+    });
+    expect(assetsFetched).toBe(false);
+  });
+
+  it("accepts the browser read session cookie for structured queries", async () => {
+    const response = await handleRequest(
+      new Request("https://center.local/api/query", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "LaneDeckReadSession=read-token",
+        },
+        body: JSON.stringify({
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: {},
+        }),
+      }),
+      createHarness().env,
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("accepts the browser read session cookie for live WebSocket auth", async () => {
+    let fetchedId: string | undefined;
+    const response = await handleRequest(
+      new Request("https://center.local/ws/browser?workspaceId=workspace.local", {
+        headers: {
+          upgrade: "websocket",
+          cookie: "LaneDeckReadSession=read-token",
+        },
+      }),
+      {
+        ...createHarness().env,
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          {
+            fetch: async () => new Response(null, { status: 204 }),
+          },
+          (id) => {
+            fetchedId = id as unknown as string;
+          },
+        ),
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(fetchedId).toBe("durable:workspace.local");
+  });
+
   it("serves shell assets for browser GET routes", async () => {
     let coordinatorFetched = false;
     let requestedUrl: string | undefined;

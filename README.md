@@ -33,3 +33,8 @@ corepack pnpm run verify:center
 Cloudflare R2 must be enabled on the account before deploy. The verification
 script writes a `deploy-health-*` workspace to D1 and R2, then reads it back
 through the deployed Worker.
+
+The browser shell is served by the center Worker through Workers Static Assets.
+Open `https://lanedeck-center.<subdomain>.workers.dev/?readToken=...` once to
+establish the HttpOnly read session cookie; the redirected shell page does not
+carry the read token in its static JavaScript bundle.
