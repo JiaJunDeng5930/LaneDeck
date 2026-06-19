@@ -4,6 +4,7 @@ import {
   e2eEventText,
   e2eLaneId,
   e2eQuietSignalText,
+  e2eWorkspaceId,
   makeCountTriggeredAgentInput,
   makeTimeTriggeredQuietSignalAgentInput,
 } from "../support/contract-fixtures";
@@ -45,7 +46,10 @@ test.describe("agent ingest to dashboard", () => {
     } = readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(
-      urlWithQuery(liveWsUrl!, { readToken: readToken! }),
+      urlWithQuery(liveWsUrl!, {
+        workspaceId: e2eWorkspaceId,
+        readToken: readToken!,
+      }),
     );
 
     try {
@@ -118,7 +122,10 @@ test.describe("agent ingest to dashboard", () => {
       readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(
-      urlWithQuery(liveWsUrl!, { readToken: readToken! }),
+      urlWithQuery(liveWsUrl!, {
+        workspaceId: e2eWorkspaceId,
+        readToken: readToken!,
+      }),
     );
 
     try {

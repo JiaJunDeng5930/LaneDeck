@@ -203,6 +203,40 @@ describe("shell app contract", () => {
     expect(content.loads).toEqual([descriptor("workspace.local", "rev-1")]);
   });
 
+  it("reports live connection changes only after connect resolves and stop closes it", async () => {
+    const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
+    const content = new FakeContentLoader();
+    const live = new DeferredLive();
+    const liveChanges: boolean[] = [];
+    const deps: ShellDepsWithLiveConnectionChange = {
+      center,
+      live,
+      contentLoader: content,
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+      liveConnectTimeoutMs: 0,
+      onLiveConnectionChange: (connected: boolean) => {
+        liveChanges.push(connected);
+      },
+    };
+    const app = createShellApp(deps);
+
+    await app.start();
+
+    expect(content.loads).toEqual([descriptor("workspace.local", "rev-1")]);
+    expect(liveChanges).toEqual([]);
+
+    live.resolve();
+    await drainAsyncWork();
+
+    expect(liveChanges).toEqual([true]);
+
+    await app.stop();
+
+    expect(live.closed).toBe(true);
+    expect(liveChanges).toEqual([true, false]);
+  });
+
   it("loadCurrentContent returns typed failures and records content diagnostics", async () => {
     const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
     const content = new FakeContentLoader([
@@ -546,6 +580,12 @@ describe("shell app contract", () => {
   });
 });
 
+type ShellDepsWithLiveConnectionChange = Parameters<
+  typeof createShellApp
+>[0] & {
+  onLiveConnectionChange(connected: boolean): void;
+};
+
 function descriptor(
   workspaceId: string,
   revision: string,
@@ -638,6 +678,31 @@ class FakeLive implements BrowserLiveClient {
         this.closed = true;
       },
     };
+  }
+
+  emit(event: BrowserLiveEvent): void {
+    this.handlers?.onEvent(event);
+  }
+}
+
+class DeferredLive implements BrowserLiveClient {
+  connectCount = 0;
+  closed = false;
+  private readonly deferred = deferredPromise<BrowserLiveConnection>();
+  private handlers: BrowserLiveHandlers | undefined;
+
+  async connect(handlers: BrowserLiveHandlers): Promise<BrowserLiveConnection> {
+    this.connectCount += 1;
+    this.handlers = handlers;
+    return await this.deferred.promise;
+  }
+
+  resolve(): void {
+    this.deferred.resolve({
+      close: async () => {
+        this.closed = true;
+      },
+    });
   }
 
   emit(event: BrowserLiveEvent): void {
