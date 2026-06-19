@@ -141,13 +141,18 @@ export function createIframeContentLoader(
         if (pendingSession === session) {
           activeSession = session;
           pendingSession = undefined;
+          sendFullInit(session, hostState);
           sendHostState(session, hostState);
         }
         return session;
       } catch (error) {
         if (pendingSession === session) {
           pendingSession = undefined;
-          await restoreAbandonedFrame(host, previousActiveSession);
+          await restoreAbandonedFrame(
+            host,
+            previousActiveSession,
+            loadTimeoutMs,
+          );
         }
         pendingLoadCleanup?.();
         pendingLoadCleanup = undefined;
@@ -183,6 +188,16 @@ export function createIframeContentLoader(
   };
 }
 
+function sendFullInit(
+  session: LoadedContentSession,
+  fallbackHostState: ContentHostState,
+): void {
+  session.postMessage({
+    type: "init",
+    payload: { hostState: session.hostState ?? fallbackHostState },
+  });
+}
+
 function sendHostState(
   session: LoadedContentSession,
   fallbackHostState: ContentHostState,
@@ -200,10 +215,36 @@ function bootstrapHostState(hostState: ContentHostState): ContentHostState {
 async function restoreAbandonedFrame(
   host: ContentFrameHost,
   previousActiveSession: LoadedContentSession | undefined,
+  loadTimeoutMs: number,
 ): Promise<void> {
   try {
     if (previousActiveSession !== undefined) {
       host.setSource(previousActiveSession.uri);
+      const sendBootstrapInit = () => {
+        previousActiveSession.postMessage({
+          type: "init",
+          payload: {
+            hostState: bootstrapHostState(
+              previousActiveSession.hostState ??
+                defaultHostState(previousActiveSession.descriptor),
+            ),
+          },
+        });
+      };
+      const cleanupInitRetry = startInitRetry(sendBootstrapInit);
+      try {
+        await waitForFrameLoad(host, loadTimeoutMs, () => undefined);
+      } finally {
+        cleanupInitRetry();
+      }
+      sendFullInit(
+        previousActiveSession,
+        defaultHostState(previousActiveSession.descriptor),
+      );
+      sendHostState(
+        previousActiveSession,
+        defaultHostState(previousActiveSession.descriptor),
+      );
       return;
     }
     await host.close();
