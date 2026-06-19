@@ -143,6 +143,50 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("renders only frames for the dashboard lane route", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+        laneId: "lane.keep",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane.keep",
+                stage: "metric",
+                frameNo: 3,
+                recordCount: 4,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:03:00.000Z",
+                summary: { eventText: "target lane frame" },
+              },
+              {
+                laneId: "lane.drop",
+                stage: "event",
+                frameNo: 4,
+                recordCount: 1,
+                triggerKind: "time",
+                closedAt: "2026-06-11T00:04:00.000Z",
+                summary: { eventText: "other lane frame" },
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain("target lane frame");
+    expect(rendered.html).toContain("lane.keep");
+    expect(rendered.html).not.toContain("other lane frame");
+    expect(rendered.html).not.toContain("lane.drop");
+    expect(rendered.pickIds).toHaveLength(2);
+    expect(rendered.pickIds[1]).toContain("lane.keep");
+  });
+
   it("renders unique fallback pick ids for same lane stage frame identities", () => {
     const rendered = renderDashboardMarkup(
       {
@@ -239,6 +283,60 @@ describe("content package contract", () => {
       "Bearer shell-read-token",
     );
     expect(document.root.innerHTML).toContain("shell boot render");
+    app.dispose();
+  });
+
+  it("keeps shell query access after a picker-only host state patch", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          rows: [
+            {
+              laneId: "lane.after-picker",
+              eventText: "authorized render",
+            },
+          ],
+          diagnostics: [],
+        }),
+    );
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        centerQueryUrl: "https://center.example.test/api/query",
+        centerReadToken: "shell-read-token",
+        route: { view: "dashboard", workspaceId: "workspace.local" },
+      } as ShellHostState & { centerReadToken: string },
+    });
+    const app = createContentApp({
+      query: createHttpCenterQueryClient({ fetch }),
+      shell,
+    });
+
+    await app.init();
+    fetch.mockClear();
+    shell.updateHostState({ pickerEnabled: true });
+    await app.render({
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.after-picker",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://center.example.test/api/query",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const afterPatch = fetch.mock.calls[0]?.[1];
+    expect(JSON.parse(String(afterPatch?.body))).toEqual({
+      workspaceId: "workspace.local",
+      query: "current_state",
+      params: { laneId: "lane.after-picker" },
+    });
+    expect((afterPatch?.headers as Headers).get("authorization")).toBe(
+      "Bearer shell-read-token",
+    );
+    expect(document.root.innerHTML).toContain("authorized render");
     app.dispose();
   });
 
@@ -415,13 +513,13 @@ describe("content package contract", () => {
     });
 
     query.resolve("lane.second", {
-      rows: [{ eventText: "second route event" }],
+      rows: [{ laneId: "lane.second", eventText: "second route event" }],
       diagnostics: [],
     });
     await secondRender;
 
     query.resolve("lane.first", {
-      rows: [{ eventText: "first route event" }],
+      rows: [{ laneId: "lane.first", eventText: "first route event" }],
       diagnostics: [],
     });
     await firstRender;
@@ -438,7 +536,12 @@ describe("content package contract", () => {
       hostState: { pickerEnabled: false },
     });
     const query = new FakeQuery({
-      rows: [{ eventText: "route update render" }],
+      rows: [
+        {
+          laneId: "lane.route-update",
+          eventText: "route update render",
+        },
+      ],
       diagnostics: [],
     });
     const app = createContentApp({

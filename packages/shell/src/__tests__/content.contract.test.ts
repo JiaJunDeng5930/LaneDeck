@@ -188,7 +188,7 @@ describe("content iframe loading", () => {
     });
   });
 
-  it("forwards picker mode as host state and height changes to the active frame", async () => {
+  it("forwards picker mode as picker-only host state and height changes to the active frame", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
     await loadReady(loader.loadCurrent(descriptorWithHostState()), host);
@@ -202,7 +202,7 @@ describe("content iframe loading", () => {
     });
     expect(host.messages.at(-1)).toEqual({
       type: "host_state",
-      payload: { hostState: hostState(true) },
+      payload: { hostState: bootstrapHostState(true) },
     });
     expect(host.heights).toEqual([240.2]);
   });
@@ -251,7 +251,7 @@ describe("content iframe loading", () => {
     });
     expect(host.messages.at(-1)).toEqual({
       type: "host_state",
-      payload: { hostState: hostState(true, "rev-1") },
+      payload: { hostState: bootstrapHostState(true) },
     });
     expect(host.heights).toEqual([360]);
   });
@@ -303,7 +303,7 @@ describe("content iframe loading", () => {
 
       expect(host.messages).toContainEqual({
         type: "host_state",
-        payload: { hostState: hostState(true, "rev-1") },
+        payload: { hostState: bootstrapHostState(true) },
       });
       expect(host.heights).toEqual([420]);
     } finally {
