@@ -122,6 +122,44 @@ describe("content iframe loading", () => {
     },
   );
 
+  it("continues strict-origin delivery after one generated origin rejects postMessage", () => {
+    const delivered: Array<[ShellToContentMessage, string]> = [];
+    const postMessage = vi.fn(
+      (sentMessage: ShellToContentMessage, targetOrigin: string) => {
+        if (targetOrigin === "http://lanedeck.localhost") {
+          throw new SyntaxError("invalid target origin");
+        }
+        delivered.push([sentMessage, targetOrigin]);
+      },
+    );
+    const iframe = testIframe(postMessage);
+    const host = createIframeHost(iframe);
+    const message: ShellToContentMessage = {
+      type: "host_state",
+      payload: { hostState: hostState(false) },
+    };
+    const wildcardMessage: ShellToContentMessage = {
+      type: "host_state",
+      payload: { hostState: bootstrapHostState(false) },
+    };
+
+    host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
+
+    expect(() => host.postMessage(message)).not.toThrow();
+    expect(postMessage).toHaveBeenCalledWith(
+      message,
+      "http://lanedeck.localhost",
+    );
+    expect(delivered).toEqual(
+      expect.arrayContaining([
+        [wildcardMessage, "*"],
+        [message, "lanedeck://content"],
+        [message, "https://lanedeck.localhost"],
+        [message, "lanedeck://localhost"],
+      ]),
+    );
+  });
+
   it.each([
     [
       "https",

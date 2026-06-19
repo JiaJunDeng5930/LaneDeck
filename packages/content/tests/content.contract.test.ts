@@ -537,6 +537,93 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("rerenders the same route after an error when full host state repairs query access", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const route = {
+      view: "dashboard" as const,
+      workspaceId: "workspace.local",
+      laneId: "lane.same-repair",
+    };
+    const responses = [
+      Response.json({
+        rows: [
+          {
+            laneId: "lane.same-repair",
+            eventText: "initial same route render",
+          },
+        ],
+        diagnostics: [],
+      }),
+      Response.json({ rows: [], diagnostics: [] }, { status: 503 }),
+      Response.json({
+        rows: [
+          {
+            laneId: "lane.same-repair",
+            eventText: "same route repaired render",
+          },
+        ],
+        diagnostics: [],
+      }),
+    ];
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        const response = responses.shift();
+        if (response === undefined) {
+          throw new Error("missing query response");
+        }
+        return response;
+      },
+    );
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        centerQueryUrl: "https://old-center.example.test/api/query",
+        centerReadToken: "old-read-token",
+        route,
+      } as ShellHostState & { centerReadToken: string },
+    });
+    const app = createContentApp({
+      query: createHttpCenterQueryClient({ fetch }),
+      shell,
+    });
+
+    try {
+      await app.init();
+      expect(document.root.innerHTML).toContain("initial same route render");
+
+      await app.render(route);
+      expect(document.root.innerHTML).toContain("content render failed");
+
+      shell.updateHostState({
+        pickerEnabled: false,
+        centerQueryUrl: "https://repaired-center.example.test/api/query",
+        centerReadToken: "repaired-read-token",
+        route,
+      } as ShellHostState & { centerReadToken: string });
+      await drainAsyncWork();
+
+      expect(fetch).toHaveBeenCalledTimes(3);
+      const repairedQuery = fetch.mock.calls[2];
+      expect(repairedQuery?.[0]).toBe(
+        "https://repaired-center.example.test/api/query",
+      );
+      const repairedInit = repairedQuery?.[1];
+      expect(JSON.parse(String(repairedInit?.body))).toEqual({
+        workspaceId: "workspace.local",
+        query: "current_state",
+        params: { laneId: "lane.same-repair" },
+      });
+      expect((repairedInit?.headers as Headers).get("authorization")).toBe(
+        "Bearer repaired-read-token",
+      );
+      expect(document.root.innerHTML).toContain("same route repaired render");
+      expect(document.root.innerHTML).not.toContain("content render failed");
+    } finally {
+      app.dispose();
+    }
+  });
+
   it("applies picker mode updates after shell init", async () => {
     const shell = new FakeShell({
       hostState: { pickerEnabled: false },
