@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   contentUriFor,
   createIframeContentLoader,
   type ContentFrameHost,
   type ContentHostState,
+  type ContentLoader,
   type ContentSession,
   type ShellToContentMessage,
 } from "../content";
@@ -147,6 +148,55 @@ describe("content iframe loading", () => {
     expect(host.heights).toEqual([360]);
   });
 
+  it("returns a load failure after a bounded iframe load timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = new FakeFrameHost();
+      const loader = createTimedIframeContentLoader(host, { loadTimeoutMs: 5 });
+      await loadReady(
+        loader.loadCurrent(
+          {
+            workspaceId: "workspace.local",
+            revision: "rev-1",
+            path: "index.html",
+          },
+          hostState(false, "rev-1"),
+        ),
+        host,
+      );
+      host.messages.length = 0;
+      host.heights.length = 0;
+
+      const replacement = loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-2",
+          path: "index.html",
+        },
+        hostState(false, "rev-2"),
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(6);
+
+      const result = await Promise.race([
+        replacement,
+        Promise.resolve("still-pending" as const),
+      ]);
+      expect(result).toMatchObject({ status: "error" });
+
+      loader.setPickerMode(true);
+      loader.setHeight(420);
+
+      expect(host.messages).toContainEqual({
+        type: "host_state",
+        payload: { hostState: hostState(true, "rev-1") },
+      });
+      expect(host.heights).toEqual([420]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards height changes to the active frame", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
@@ -225,6 +275,18 @@ async function loadReady(
 ): Promise<void> {
   host.completeLoad();
   await expect(session).resolves.toMatchObject({ status: "ready" });
+}
+
+function createTimedIframeContentLoader(
+  host: ContentFrameHost,
+  options: { loadTimeoutMs: number },
+): ContentLoader {
+  return (
+    createIframeContentLoader as unknown as (
+      host: ContentFrameHost,
+      options: { loadTimeoutMs: number },
+    ) => ContentLoader
+  )(host, options);
 }
 
 class FakeFrameHost implements ContentFrameHost {

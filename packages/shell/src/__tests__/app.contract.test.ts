@@ -4,6 +4,7 @@ import { createShellApp } from "../app";
 import {
   contentLoadFailure,
   contentUriFor,
+  type ContentHostState,
   type ContentLoader,
   type ContentSession,
   type LoadedContentSession,
@@ -41,6 +42,68 @@ describe("shell app contract", () => {
     expect(session?.status === "ready" ? session.uri : undefined).toBe(
       "lanedeck://content/workspace.local/rev-1/index.html",
     );
+  });
+
+  it("omits center read token from external content uri host state", async () => {
+    const center = new FakeCenter([
+      descriptor("workspace.local", "rev-1", {
+        uri: "https://evil.example/app.html",
+        centerQueryUrl: "https://center.example/api/query",
+        centerReadToken: "read-token",
+      }),
+    ]);
+    const content = new FakeContentLoader();
+    const app = createShellApp({
+      center,
+      live: new FakeLive(),
+      contentLoader: content,
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+    });
+
+    await app.start();
+
+    expect(content.hostStates[0]).toEqual({
+      pickerEnabled: false,
+      workspaceId: "workspace.local",
+      contentRevision: "rev-1",
+      centerQueryUrl: "https://center.example/api/query",
+      route: { view: "dashboard", workspaceId: "workspace.local" },
+    });
+  });
+
+  it("includes center read token for generated lanedeck content host state", async () => {
+    const center = new FakeCenter([
+      descriptor("workspace.local", "rev-1", {
+        centerQueryUrl: "https://center.example/api/query",
+        centerReadToken: "read-token",
+      }),
+    ]);
+    const content = new FakeContentLoader();
+    const app = createShellApp({
+      center,
+      live: new FakeLive(),
+      contentLoader: content,
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+    });
+
+    await app.start();
+
+    expect(content.sessions[0]?.status).toBe("ready");
+    expect(
+      content.sessions[0]?.status === "ready"
+        ? content.sessions[0].uri
+        : undefined,
+    ).toBe("lanedeck://content/workspace.local/rev-1/index.html");
+    expect(content.hostStates[0]).toEqual({
+      pickerEnabled: false,
+      workspaceId: "workspace.local",
+      contentRevision: "rev-1",
+      centerQueryUrl: "https://center.example/api/query",
+      centerReadToken: "read-token",
+      route: { view: "dashboard", workspaceId: "workspace.local" },
+    });
   });
 
   it("reloads content when the live channel emits content_changed", async () => {
@@ -453,8 +516,9 @@ describe("shell app contract", () => {
 function descriptor(
   workspaceId: string,
   revision: string,
+  overrides: Partial<CurrentContentDescriptor> = {},
 ): CurrentContentDescriptor {
-  return { workspaceId, revision, path: "index.html" };
+  return { workspaceId, revision, path: "index.html", ...overrides };
 }
 
 function fixedNow(): string {
@@ -550,6 +614,7 @@ class FakeLive implements BrowserLiveClient {
 
 class FakeContentLoader implements ContentLoader {
   readonly loads: CurrentContentDescriptor[] = [];
+  readonly hostStates: Array<ContentHostState | undefined> = [];
   readonly pickerModes: boolean[] = [];
   readonly sessions: ContentSession[] = [];
   readonly heightChanges: Array<{
@@ -563,8 +628,10 @@ class FakeContentLoader implements ContentLoader {
 
   async loadCurrent(
     descriptor: CurrentContentDescriptor,
+    hostState?: ContentHostState,
   ): Promise<ContentSession> {
     this.loads.push(descriptor);
+    this.hostStates.push(hostState);
     const session =
       this.plannedSessions.shift() ??
       readySession(descriptor, this.loads.length);
