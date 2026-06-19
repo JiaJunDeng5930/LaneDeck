@@ -401,6 +401,88 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("retries a pending same-route render after full host state repairs query access", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const route = {
+      view: "dashboard" as const,
+      workspaceId: "workspace.local",
+      laneId: "lane.pending-repair",
+    };
+    const query = new PendingAccessRepairQuery({
+      rows: [
+        {
+          laneId: "lane.pending-repair",
+          eventText: "pending repair render",
+        },
+      ],
+      diagnostics: [],
+    });
+    const shell = new FakeShell({
+      hostState: {
+        pickerEnabled: false,
+        route,
+      },
+    });
+    const app = createContentApp({
+      query,
+      shell,
+    });
+
+    const init = app.init();
+    await drainAsyncWork();
+
+    expect(query.requests).toEqual([
+      {
+        request: {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: { laneId: "lane.pending-repair" },
+        },
+        queryUrl: undefined,
+        readToken: undefined,
+      },
+    ]);
+
+    shell.updateHostState({
+      pickerEnabled: false,
+      centerQueryUrl: "https://center.example.test/api/query",
+      centerReadToken: "pending-repair-token",
+      route,
+    } as ShellHostState & { centerReadToken: string });
+    await Promise.resolve();
+
+    expect(query.requests).toHaveLength(1);
+
+    query.rejectPending(new ContentError("center query access missing"));
+    await init;
+    await drainAsyncWork();
+
+    expect(query.requests).toEqual([
+      {
+        request: {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: { laneId: "lane.pending-repair" },
+        },
+        queryUrl: undefined,
+        readToken: undefined,
+      },
+      {
+        request: {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: { laneId: "lane.pending-repair" },
+        },
+        queryUrl: "https://center.example.test/api/query",
+        readToken: "pending-repair-token",
+      },
+    ]);
+    expect(document.root.innerHTML).toContain("pending repair render");
+    expect(document.root.innerHTML).not.toContain("content render failed");
+    app.dispose();
+  });
+
   it("applies picker mode updates after shell init", async () => {
     const shell = new FakeShell({
       hostState: { pickerEnabled: false },
@@ -802,6 +884,47 @@ class SequencedQuery implements CenterQueryClient {
 class RejectingQuery implements CenterQueryClient {
   async query(_request: QueryRequest): Promise<QueryResponse> {
     throw new Error("center unavailable");
+  }
+}
+
+class PendingAccessRepairQuery implements CenterQueryClient {
+  readonly requests: Array<{
+    request: QueryRequest;
+    queryUrl: string | undefined;
+    readToken: string | undefined;
+  }> = [];
+  private queryUrl: string | undefined;
+  private readToken: string | undefined;
+  private pendingReject: ((error: unknown) => void) | undefined;
+
+  constructor(private readonly repairedResponse: QueryResponse) {}
+
+  setQueryUrl(queryUrl: string): void {
+    this.queryUrl = queryUrl;
+  }
+
+  setReadToken(readToken: string | undefined): void {
+    this.readToken = readToken;
+  }
+
+  async query(request: QueryRequest): Promise<QueryResponse> {
+    this.requests.push({
+      request,
+      queryUrl: this.queryUrl,
+      readToken: this.readToken,
+    });
+    if (this.queryUrl === undefined || this.readToken === undefined) {
+      return new Promise((_resolve, reject) => {
+        this.pendingReject = reject;
+      });
+    }
+
+    return this.repairedResponse;
+  }
+
+  rejectPending(error: unknown): void {
+    this.pendingReject?.(error);
+    this.pendingReject = undefined;
   }
 }
 
