@@ -58,6 +58,7 @@ export function createIframeContentLoader(
   let pendingSession: LoadedContentSession | undefined;
   let reloadCount = 0;
   let pendingLoadCleanup: (() => void) | undefined;
+  let pendingInitCleanup: (() => void) | undefined;
 
   return {
     async loadCurrent(
@@ -68,6 +69,8 @@ export function createIframeContentLoader(
       try {
         pendingLoadCleanup?.();
         pendingLoadCleanup = undefined;
+        pendingInitCleanup?.();
+        pendingInitCleanup = undefined;
         reloadCount += 1;
         const uri = contentUriFor(descriptor);
         session = {
@@ -87,11 +90,15 @@ export function createIframeContentLoader(
             if (activeSession === this) {
               pendingLoadCleanup?.();
               pendingLoadCleanup = undefined;
+              pendingInitCleanup?.();
+              pendingInitCleanup = undefined;
               activeSession = undefined;
             }
             if (pendingSession === this) {
               pendingLoadCleanup?.();
               pendingLoadCleanup = undefined;
+              pendingInitCleanup?.();
+              pendingInitCleanup = undefined;
               pendingSession = undefined;
             }
             await host.close();
@@ -100,7 +107,10 @@ export function createIframeContentLoader(
         pendingSession = session;
         const createdSession = session;
         const sendInit = () => {
-          if (activeSession === createdSession) {
+          if (
+            pendingSession === createdSession ||
+            activeSession === createdSession
+          ) {
             createdSession.postMessage({
               type: "init",
               payload: {
@@ -110,12 +120,15 @@ export function createIframeContentLoader(
           }
         };
         host.setSource(uri);
+        pendingInitCleanup = startInitRetry(sendInit);
         await waitForFrameLoad(host, (cleanup) => {
           pendingLoadCleanup = cleanup;
         });
         if (pendingLoadCleanup !== undefined) {
           pendingLoadCleanup = undefined;
         }
+        pendingInitCleanup?.();
+        pendingInitCleanup = undefined;
         if (pendingSession === session) {
           activeSession = session;
           pendingSession = undefined;
@@ -126,6 +139,10 @@ export function createIframeContentLoader(
         if (pendingSession === session) {
           pendingSession = undefined;
         }
+        pendingLoadCleanup?.();
+        pendingLoadCleanup = undefined;
+        pendingInitCleanup?.();
+        pendingInitCleanup = undefined;
         return contentLoadFailure(error, descriptor);
       }
     },
@@ -147,11 +164,38 @@ export function createIframeContentLoader(
     async close(): Promise<void> {
       pendingLoadCleanup?.();
       pendingLoadCleanup = undefined;
+      pendingInitCleanup?.();
+      pendingInitCleanup = undefined;
       activeSession = undefined;
       pendingSession = undefined;
       await host.close();
     },
   };
+}
+
+function startInitRetry(sendInit: () => void): () => void {
+  const retryIntervalMs = 250;
+  const maxAttempts = 20;
+  let attempts = 0;
+  let interval: ReturnType<typeof globalThis.setInterval> | undefined;
+
+  const cleanup = () => {
+    if (interval !== undefined) {
+      globalThis.clearInterval(interval);
+      interval = undefined;
+    }
+  };
+  const tick = () => {
+    attempts += 1;
+    sendInit();
+    if (attempts >= maxAttempts) {
+      cleanup();
+    }
+  };
+
+  tick();
+  interval = globalThis.setInterval(tick, retryIntervalMs);
+  return cleanup;
 }
 
 function updateSessionPickerMode(

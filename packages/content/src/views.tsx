@@ -200,6 +200,10 @@ function framePickId(
     scalarString(frame.laneId) ?? `row-${rowIndex}`,
     scalarString(frame.stage) ?? "stage",
     scalarString(frame.frameNo) ?? String(frameIndex),
+    scalarString(frame.batchId) ?? `batch-${rowIndex}`,
+    scalarString(frame.machineId) ?? `machine-${rowIndex}`,
+    `row-${rowIndex}`,
+    `frame-${frameIndex}`,
   ].join(":");
 }
 
