@@ -17,6 +17,7 @@ import {
 } from "../support/harness";
 
 const readiness = readHarnessReadiness([
+  "workspaceId",
   "centerHttpUrl",
   "shellHttpUrl",
   "shellContentBaseUrl",
@@ -32,7 +33,8 @@ test.describe("AI content mutation to shell reload", () => {
     page,
     request,
   }) => {
-    const mutation = makePatchContentMutation();
+    const { workspaceId } = readiness.harness;
+    const mutation = makePatchContentMutation(workspaceId!);
     const {
       centerHttpUrl,
       shellHttpUrl,
@@ -60,6 +62,7 @@ test.describe("AI content mutation to shell reload", () => {
     expect(patchResult.contentRevision?.length).toBeGreaterThan(0);
 
     const buildRequestMutation = makeRequestLocalBuildMutation(
+      workspaceId!,
       patchResult.contentRevision!,
     );
     const buildRequestResponse = await request.post(
@@ -79,6 +82,7 @@ test.describe("AI content mutation to shell reload", () => {
     expect(buildRequestResult.buildRequestId?.length).toBeGreaterThan(0);
 
     const buildComplete = makeContentBuildCompleteRequest(
+      workspaceId!,
       buildRequestResult.buildRequestId!,
       patchResult.contentRevision!,
     );

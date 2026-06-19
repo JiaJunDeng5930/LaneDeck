@@ -7,6 +7,7 @@ E2E tests compose the local agent, Cloudflare center Worker, shell, and content 
 The default e2e run validates the test harness and reports skipped full-system scenarios. Full runs require an externally started LaneDeck system and these environment values:
 
 - `LANEDECK_E2E_FULL=1`
+- `LANEDECK_WORKSPACE_ID`
 - `LANEDECK_AGENT_SOURCE_INPUT_URL`
 - `LANEDECK_CENTER_HTTP_URL`
 - `LANEDECK_SHELL_HTTP_URL`
@@ -19,6 +20,8 @@ The default e2e run validates the test harness and reports skipped full-system s
 - `LANEDECK_AGENT_TOKEN`
 
 `LANEDECK_E2E_FIXTURE` may point to a JSON file with the same camelCase fields used by `support/harness.ts`. Environment values override fixture file values.
+
+The scenarios use `LANEDECK_WORKSPACE_ID` for every ingest, query, live, mutation, and build-complete payload. Start the shell with the same value as `VITE_LANEDECK_WORKSPACE_ID`.
 
 The scenarios use `LANEDECK_READ_TOKEN` for center query reads, `LANEDECK_AI_MUTATION_TOKEN` for AI mutation requests, and `LANEDECK_AGENT_TOKEN` for content build-complete callbacks.
 

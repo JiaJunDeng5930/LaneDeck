@@ -4,7 +4,6 @@ import {
   e2eEventText,
   e2eLaneId,
   e2eQuietSignalText,
-  e2eWorkspaceId,
   makeCountTriggeredAgentInput,
   makeTimeTriggeredQuietSignalAgentInput,
 } from "../support/contract-fixtures";
@@ -20,6 +19,7 @@ import {
 } from "../support/live-ws";
 
 const readiness = readHarnessReadiness([
+  "workspaceId",
   "agentSourceInputUrl",
   "centerHttpUrl",
   "shellHttpUrl",
@@ -36,7 +36,8 @@ test.describe("agent ingest to dashboard", () => {
     page,
     request,
   }) => {
-    const agentInput = makeCountTriggeredAgentInput();
+    const { workspaceId } = readiness.harness;
+    const agentInput = makeCountTriggeredAgentInput(workspaceId!);
     const {
       agentSourceInputUrl,
       centerHttpUrl,
@@ -48,7 +49,7 @@ test.describe("agent ingest to dashboard", () => {
 
     const liveObserver = await connectJsonMessageObserver(
       urlWithQuery(liveWsUrl!, {
-        workspaceId: e2eWorkspaceId,
+        workspaceId: workspaceId!,
         readToken: readToken!,
       }),
     );
@@ -118,13 +119,14 @@ test.describe("agent ingest to dashboard", () => {
   });
 
   test("persists a time-triggered quiet-signal event", async ({ request }) => {
-    const agentInput = makeTimeTriggeredQuietSignalAgentInput();
+    const { workspaceId } = readiness.harness;
+    const agentInput = makeTimeTriggeredQuietSignalAgentInput(workspaceId!);
     const { agentSourceInputUrl, centerHttpUrl, liveWsUrl, readToken } =
       readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(
       urlWithQuery(liveWsUrl!, {
-        workspaceId: e2eWorkspaceId,
+        workspaceId: workspaceId!,
         readToken: readToken!,
       }),
     );

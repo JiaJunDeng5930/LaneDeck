@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 export interface LaneDeckE2EHarness {
+  workspaceId?: string;
   agentSourceInputUrl?: string;
   centerHttpUrl?: string;
   shellHttpUrl?: string;
@@ -22,6 +23,7 @@ export interface HarnessReadiness {
 }
 
 const capabilityLabels: Record<HarnessCapability, string> = {
+  workspaceId: "LANEDECK_WORKSPACE_ID",
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
@@ -90,6 +92,7 @@ function readHarness(): LaneDeckE2EHarness {
   const fixture = readFixtureFile();
 
   return {
+    workspaceId: process.env.LANEDECK_WORKSPACE_ID ?? fixture.workspaceId,
     agentSourceInputUrl:
       process.env.LANEDECK_AGENT_SOURCE_INPUT_URL ??
       fixture.agentSourceInputUrl,

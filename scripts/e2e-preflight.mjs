@@ -8,6 +8,7 @@ if (!fullE2EEnabled) {
 
 const fixture = readFixture();
 const capabilities = {
+  workspaceId: "LANEDECK_WORKSPACE_ID",
   agentSourceInputUrl: "LANEDECK_AGENT_SOURCE_INPUT_URL",
   centerHttpUrl: "LANEDECK_CENTER_HTTP_URL",
   shellHttpUrl: "LANEDECK_SHELL_HTTP_URL",
@@ -57,6 +58,7 @@ function requiredCapabilities(args) {
   const required = new Set();
   for (const spec of selectedSpecs) {
     if (spec.includes("agent-to-center-flow")) {
+      required.add("workspaceId");
       required.add("agentSourceInputUrl");
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
@@ -67,6 +69,7 @@ function requiredCapabilities(args) {
     }
 
     if (spec.includes("content-mutation-flow")) {
+      required.add("workspaceId");
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
       required.add("shellContentBaseUrl");

@@ -9,7 +9,6 @@ import {
   type MutationRequest,
 } from "@lanedeck/protocol";
 
-export const e2eWorkspaceId = "workspace-e2e";
 export const e2eMachineId = "machine-e2e";
 export const e2eLaneId = "lane-e2e";
 export const e2eEventText = "LaneDeck e2e count-triggered event";
@@ -34,11 +33,13 @@ export interface AgentSourceInput {
   expectedEventText: string;
 }
 
-export function makeCountTriggeredAgentInput(): AgentSourceInput {
+export function makeCountTriggeredAgentInput(
+  workspaceId: string,
+): AgentSourceInput {
   const expectedFrame = makeCountTriggeredFrame();
 
   return {
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     machineId: e2eMachineId,
     laneId: e2eLaneId,
     triggerKind: expectedFrame.triggerKind,
@@ -47,11 +48,13 @@ export function makeCountTriggeredAgentInput(): AgentSourceInput {
   };
 }
 
-export function makeTimeTriggeredQuietSignalAgentInput(): AgentSourceInput {
+export function makeTimeTriggeredQuietSignalAgentInput(
+  workspaceId: string,
+): AgentSourceInput {
   const expectedFrame = makeTimeTriggeredQuietSignalFrame();
 
   return {
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     machineId: e2eMachineId,
     laneId: e2eLaneId,
     triggerKind: expectedFrame.triggerKind,
@@ -60,27 +63,29 @@ export function makeTimeTriggeredQuietSignalAgentInput(): AgentSourceInput {
   };
 }
 
-export function makeCountTriggeredBatch(): IngestBatch {
+export function makeCountTriggeredBatch(workspaceId: string): IngestBatch {
   return validatedIngestBatch({
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     machineId: e2eMachineId,
     batchId: "batch-e2e-count",
     frames: [makeCountTriggeredFrame()],
   });
 }
 
-export function makeTimeTriggeredQuietSignalBatch(): IngestBatch {
+export function makeTimeTriggeredQuietSignalBatch(
+  workspaceId: string,
+): IngestBatch {
   return validatedIngestBatch({
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     machineId: e2eMachineId,
     batchId: "batch-e2e-time",
     frames: [makeTimeTriggeredQuietSignalFrame()],
   });
 }
 
-export function makePatchContentMutation(): MutationRequest {
+export function makePatchContentMutation(workspaceId: string): MutationRequest {
   const request: MutationRequest = {
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     mutation: "patch_content",
     payload: {
       path: e2eContentSourcePath,
@@ -97,10 +102,11 @@ export function makePatchContentMutation(): MutationRequest {
 }
 
 export function makeRequestLocalBuildMutation(
+  workspaceId: string,
   contentRevision: string,
 ): MutationRequest {
   const request: MutationRequest = {
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     mutation: "request_local_build",
     payload: {
       machineId: e2eMachineId,
@@ -115,11 +121,12 @@ export function makeRequestLocalBuildMutation(
 }
 
 export function makeContentBuildCompleteRequest(
+  workspaceId: string,
   buildRequestId: string,
   contentRevision: string,
 ): ContentBuildCompleteRequest {
   return parseContentBuildCompleteRequest({
-    workspaceId: e2eWorkspaceId,
+    workspaceId,
     machineId: e2eMachineId,
     buildRequestId,
     contentId: e2eContentId,
