@@ -41,13 +41,23 @@ export function ShellView() {
       url: centerLiveUrl(centerBaseUrl, workspaceId, readToken),
     });
     const contentLoader = createIframeContentLoader(createIframeHost(iframe));
+    let startupSettled = false;
+    let contentReady = false;
     const app = createShellApp({
       center,
       live,
       contentLoader,
       clipboard: createNavigatorClipboardWriter(),
       onContentSession(session) {
-        if (mounted && session.status !== "ready") {
+        if (!mounted) {
+          return;
+        }
+        contentReady = session.status === "ready";
+        if (contentReady && startupSettled) {
+          setStatus("Ready");
+          return;
+        }
+        if (!contentReady) {
           setStatus("Content error");
         }
       },
@@ -63,8 +73,9 @@ export function ShellView() {
     void app
       .start()
       .then(() => {
+        startupSettled = true;
         if (mounted) {
-          setStatus("Ready");
+          setStatus(contentReady ? "Ready" : "Content error");
         }
       })
       .catch((error: unknown) => {
