@@ -6,6 +6,7 @@ import type {
 } from "@lanedeck/protocol";
 
 import {
+  ContentError,
   createContentApp,
   createHttpCenterQueryClient,
   registerPickTarget,
@@ -43,7 +44,7 @@ describe("content package contract", () => {
     const query = new FakeQuery({
       rows: [
         {
-          pickId: "content/source/dashboard.tsx:14",
+          pickId: "packages/content/src/views.tsx#dashboard.row.14",
           laneId: "lane.build",
           eventText: "build complete",
           triggerKind: "count",
@@ -195,7 +196,7 @@ describe("content package contract", () => {
 
     await app.init();
     const registration = registerPickTarget({
-      pickId: "content/source/dashboard.tsx:55",
+      pickId: "packages/content/src/views.tsx#dashboard.manual-55",
       element: target as unknown as HTMLElement,
     });
     target.dispatch("click");
@@ -204,7 +205,7 @@ describe("content package contract", () => {
 
     expect(shell.messages).toContainEqual({
       type: "pick_result",
-      payload: { pickId: "content/source/dashboard.tsx:55" },
+      payload: { pickId: "packages/content/src/views.tsx#dashboard.manual-55" },
     });
 
     registration.unregister();
@@ -223,7 +224,7 @@ describe("content package contract", () => {
 
     await app.init();
     const registration = registerPickTarget({
-      pickId: "content/source/dashboard.tsx:66",
+      pickId: "packages/content/src/views.tsx#dashboard.manual-66",
       element: target as unknown as HTMLElement,
     });
     target.dispatch("pointerenter");
@@ -247,7 +248,7 @@ describe("content package contract", () => {
 
     await app.init();
     const registration = registerPickTarget({
-      pickId: "content/source/dashboard.tsx:44",
+      pickId: "packages/content/src/views.tsx#dashboard.manual-44",
       element: target as unknown as HTMLElement,
     });
     target.dispatch("click");
@@ -256,10 +257,55 @@ describe("content package contract", () => {
     expect(target.stopPropagationCalls).toBe(1);
     expect(shell.messages).toContainEqual({
       type: "pick_result",
-      payload: { pickId: "content/source/dashboard.tsx:44" },
+      payload: { pickId: "packages/content/src/views.tsx#dashboard.manual-44" },
     });
 
     registration.unregister();
+    app.dispose();
+  });
+
+  it("rejects empty and non-source-level pick ids", () => {
+    const target = new TestPickElement();
+
+    expect(() =>
+      registerPickTarget({
+        pickId: "",
+        element: target as unknown as HTMLElement,
+      }),
+    ).toThrow(ContentError);
+    expect(() =>
+      registerPickTarget({
+        pickId: "packages/content/src/views.tsx.dashboard.manual",
+        element: target as unknown as HTMLElement,
+      }),
+    ).toThrow(ContentError);
+  });
+
+  it("stops pointer and click reporting after unregister", async () => {
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: true },
+    });
+    const app = createContentApp({
+      query: new FakeQuery({ rows: [], diagnostics: [] }),
+      shell,
+    });
+    const target = new TestPickElement();
+
+    await app.init();
+    const registration = registerPickTarget({
+      pickId: "packages/content/src/views.tsx#dashboard.removed",
+      element: target as unknown as HTMLElement,
+    });
+    registration.unregister();
+    target.dispatch("pointerenter");
+    target.dispatch("click");
+
+    expect(target.getAttribute("data-pick-state")).toBeNull();
+    expect(target.preventDefaultCalls).toBe(0);
+    expect(target.stopPropagationCalls).toBe(0);
+    expect(shell.messages).not.toContainEqual(
+      expect.objectContaining({ type: "pick_result" }),
+    );
     app.dispose();
   });
 
@@ -275,7 +321,7 @@ describe("content package contract", () => {
 
     await app.init();
     const registration = registerPickTarget({
-      pickId: "content/source/dashboard.tsx:44",
+      pickId: "packages/content/src/views.tsx#dashboard.manual-44",
       element: target as unknown as HTMLElement,
     });
     target.dispatch("click");

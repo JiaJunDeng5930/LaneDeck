@@ -68,6 +68,46 @@ describe("center query client", () => {
     ).rejects.toBeInstanceOf(ContentError);
   });
 
+  it.each([
+    {
+      name: "sparse rows",
+      body: () => {
+        const rows: unknown[] = [];
+        rows[1] = {};
+        return { rows, diagnostics: [] };
+      },
+    },
+    {
+      name: "sparse diagnostics",
+      body: () => {
+        const diagnostics: unknown[] = [];
+        diagnostics[1] = { path: "$", message: "bad response" };
+        return { rows: [], diagnostics };
+      },
+    },
+    {
+      name: "sparse nested arrays",
+      body: () => {
+        const frames: unknown[] = [];
+        frames[1] = { laneId: "lane.build" };
+        return { rows: [{ frames }], diagnostics: [] };
+      },
+    },
+  ])("rejects $name in query responses", async ({ body }) => {
+    const client = createHttpCenterQueryClient({
+      queryUrl: "https://center.example.test/api/query",
+      fetch: async () => fakeJsonResponse(body()),
+    });
+
+    await expect(
+      client.query({
+        workspaceId: "workspace.local",
+        query: "dashboard",
+        params: {},
+      }),
+    ).rejects.toBeInstanceOf(ContentError);
+  });
+
   it("applies read tokens supplied after construction", async () => {
     const fetch = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -107,3 +147,11 @@ describe("center query client", () => {
     ).rejects.toBeInstanceOf(ContentError);
   });
 });
+
+function fakeJsonResponse(body: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => body,
+  } as Response;
+}
