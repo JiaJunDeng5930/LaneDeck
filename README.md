@@ -38,3 +38,5 @@ The browser shell is served by the center Worker through Workers Static Assets.
 Open `https://lanedeck-center.<subdomain>.workers.dev/?readToken=...` once to
 establish the HttpOnly read session cookie; the redirected shell page does not
 carry the read token in its static JavaScript bundle.
+The deployed shell loads iframe content through the Worker route
+`/content-by-workspace/{workspaceId}/{revision}/{assetPath}`.

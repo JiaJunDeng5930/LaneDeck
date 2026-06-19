@@ -941,6 +941,46 @@ describe("center-worker contract", () => {
     await expect(response.text()).resolves.toBe("<svg></svg>");
   });
 
+  it("GET /content-by-workspace maps shell workspace URLs to revision assets", async () => {
+    const harness = createHarness();
+    const bucket = new RouteR2Bucket();
+    bucket.putObject(
+      "content/revision-1/index.html",
+      "<main>workspace shell content</main>",
+      "text/html; charset=utf-8",
+    );
+
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/content-by-workspace/workspace.local/revision-1/index.html",
+      ),
+      {
+        ...harness.env,
+        LANEDECK_BUCKET: bucket as unknown as R2Bucket,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain(
+      "workspace shell content",
+    );
+  });
+
+  it("GET /content-by-workspace rejects encoded separators in workspace segments", async () => {
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/content-by-workspace/workspace%2Flocal/revision-1/index.html",
+      ),
+      createHarness().env,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_content_path",
+      diagnostics: [expect.objectContaining({ path: "path" })],
+    });
+  });
+
   it("GET /content rejects encoded slash inside asset path segments", async () => {
     const harness = createHarness();
     const response = await handleRequest(

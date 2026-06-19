@@ -147,7 +147,11 @@ async function routeRequest(
     );
   }
 
-  if (request.method === "GET" && url.pathname.startsWith("/content/")) {
+  if (
+    request.method === "GET" &&
+    (url.pathname.startsWith("/content/") ||
+      url.pathname.startsWith("/content-by-workspace/"))
+  ) {
     return await readContentAsset(url, env);
   }
 
@@ -258,14 +262,45 @@ function parseContentAssetPath(pathname: string): {
   revision: string;
   assetPath: string;
 } {
-  const [, contentSegment, revisionSegment, ...assetSegments] =
-    pathname.split("/");
+  const [, contentSegment, ...segments] = pathname.split("/");
+  const [workspaceSegment, revisionSegment, ...workspaceAssetSegments] =
+    segments;
+  const [legacyRevisionSegment, ...legacyAssetSegments] = segments;
+  const assetSegments =
+    contentSegment === "content-by-workspace"
+      ? workspaceAssetSegments
+      : legacyAssetSegments;
+  const selectedRevisionSegment =
+    contentSegment === "content-by-workspace"
+      ? revisionSegment
+      : legacyRevisionSegment;
+
+  validateContentPathShape(contentSegment, selectedRevisionSegment, segments);
+  if (contentSegment === "content-by-workspace") {
+    decodeContentPathSegment(workspaceSegment ?? "");
+  }
+
+  return {
+    revision: decodeContentPathSegment(selectedRevisionSegment),
+    assetPath: assetSegments.map(decodeContentPathSegment).join("/"),
+  };
+}
+
+function validateContentPathShape(
+  contentSegment: string | undefined,
+  revisionSegment: string | undefined,
+  segments: string[],
+): void {
+  const expectedSegmentCount =
+    contentSegment === "content-by-workspace" ? 3 : 2;
+  const supportedContentSegment =
+    contentSegment === "content" || contentSegment === "content-by-workspace";
   if (
-    contentSegment !== "content" ||
+    !supportedContentSegment ||
     revisionSegment === undefined ||
     revisionSegment.length === 0 ||
-    assetSegments.length === 0 ||
-    assetSegments.some((segment) => segment.length === 0)
+    segments.length < expectedSegmentCount ||
+    segments.some((segment) => segment.length === 0)
   ) {
     throw badRequest(
       "invalid_content_path",
@@ -273,11 +308,6 @@ function parseContentAssetPath(pathname: string): {
       "expected content revision and asset path",
     );
   }
-
-  return {
-    revision: decodeContentPathSegment(revisionSegment),
-    assetPath: assetSegments.map(decodeContentPathSegment).join("/"),
-  };
 }
 
 function decodeContentPathSegment(segment: string): string {
