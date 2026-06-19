@@ -79,6 +79,7 @@ describe("content iframe loading", () => {
     const calls = postMessage.mock.calls;
     expect(calls).toEqual(
       expect.arrayContaining([
+        [message, "lanedeck://content"],
         [message, "http://lanedeck.localhost"],
         [message, "https://lanedeck.localhost"],
         [message, "lanedeck://localhost"],
@@ -446,6 +447,72 @@ describe("content iframe loading", () => {
     }
   });
 
+  it("keeps superseding load cleanup scoped to the load that failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = new ListenerFrameHost();
+      const loader = createTimedIframeContentLoader(host, {
+        loadTimeoutMs: 1000,
+      });
+
+      const first = loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-1",
+          path: "index.html",
+        },
+        hostState(false, "rev-1"),
+      );
+      await Promise.resolve();
+      expect(host.activeLoadListenerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      const second = loader.loadCurrent(
+        {
+          workspaceId: "workspace.local",
+          revision: "rev-2",
+          path: "index.html",
+        },
+        hostState(true, "rev-2"),
+      );
+      await Promise.resolve();
+      expect(host.activeLoadListenerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2);
+      await drainAsyncWork();
+
+      await expect(first).resolves.toMatchObject({ status: "error" });
+      expect(host.activeLoadListenerCount()).toBe(1);
+
+      const messageCountAfterFirstFailure = host.messages.length;
+      await vi.advanceTimersByTimeAsync(250);
+      expect(host.messages.slice(messageCountAfterFirstFailure)).toContainEqual(
+        {
+          type: "init",
+          payload: { hostState: bootstrapHostState(true) },
+        },
+      );
+
+      host.completeLoad();
+      await drainAsyncWork();
+
+      await expect(second).resolves.toMatchObject({
+        status: "ready",
+        revision: "rev-2",
+      });
+      expect(host.messages).toContainEqual({
+        type: "init",
+        payload: { hostState: hostState(true, "rev-2") },
+      });
+      expect(host.messages).toContainEqual({
+        type: "host_state",
+        payload: { hostState: hostState(true, "rev-2") },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears the frame when initial iframe load times out", async () => {
     vi.useFakeTimers();
     try {
@@ -624,6 +691,56 @@ class FakeFrameHost implements ContentFrameHost {
 
   throwOnNextSetSource(error: Error): void {
     this.nextSetSourceError = error;
+  }
+
+  setHeight(height: number): void {
+    this.heights.push(height);
+  }
+
+  close(): void {
+    this.closeCount += 1;
+    this.currentSource = undefined;
+  }
+}
+
+class ListenerFrameHost implements ContentFrameHost {
+  readonly sources: string[] = [];
+  readonly messages: unknown[] = [];
+  readonly heights: number[] = [];
+  currentSource: string | undefined;
+  closeCount = 0;
+  private readonly loadListeners: Array<{
+    active: boolean;
+    listener: () => void;
+  }> = [];
+
+  setSource(uri: string): void {
+    this.sources.push(uri);
+    this.currentSource = uri;
+  }
+
+  postMessage(message: ShellToContentMessage): void {
+    this.messages.push(message);
+  }
+
+  onLoad(listener: () => void): () => void {
+    const entry = { active: true, listener };
+    this.loadListeners.push(entry);
+    return () => {
+      entry.active = false;
+    };
+  }
+
+  completeLoad(): void {
+    for (const entry of [...this.loadListeners]) {
+      if (entry.active) {
+        entry.listener();
+      }
+    }
+  }
+
+  activeLoadListenerCount(): number {
+    return this.loadListeners.filter((entry) => entry.active).length;
   }
 
   setHeight(height: number): void {

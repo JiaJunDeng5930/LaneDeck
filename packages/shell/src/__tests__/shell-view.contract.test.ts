@@ -4,6 +4,7 @@ import { isAllowedContentOrigin } from "../ui/ShellView";
 
 describe("ShellView content message origin filtering", () => {
   it.each([
+    "lanedeck://content",
     "http://lanedeck.localhost",
     "https://lanedeck.localhost",
     "lanedeck://localhost",
