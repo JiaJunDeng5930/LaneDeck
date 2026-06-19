@@ -10,15 +10,16 @@ jobs:
   package-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "24.13.0"
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v4
         with:
           version: 11.5.3
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.93.0"
           components: clippy,rustfmt
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
@@ -31,11 +32,11 @@ jobs:
     env:
       LANEDECK_E2E_FULL: "0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "24.13.0"
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v4
         with:
           version: 11.5.3
       - run: pnpm install --frozen-lockfile
