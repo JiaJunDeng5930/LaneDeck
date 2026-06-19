@@ -1,17 +1,17 @@
 import {
+  ProtocolError,
+  parseShellHostContentRoute,
+  parseShellHostMessage,
   parseShellContentMessage,
   type JsonObject,
   type ShellContentMessage,
+  type ShellHostState as ProtocolShellHostState,
 } from "@lanedeck/protocol";
 
 import { ContentError } from "./errors";
 import type { ContentRoute } from "./query";
 
-export interface ShellHostState {
-  pickerEnabled: boolean;
-  workspaceId?: string;
-  centerQueryUrl?: string;
-  contentRevision?: string;
+export interface ShellHostState extends Omit<ProtocolShellHostState, "route"> {
   route?: ContentRoute;
 }
 
@@ -125,9 +125,15 @@ export function parseShellInitMessage(
     return undefined;
   }
 
-  const payload = recordAt(input, "payload");
-  const hostState = parseHostState(payload.hostState);
-  const route = parseContentRoute(payload.route ?? hostState.route);
+  const message = parseHostMessage(input);
+  if (message.type !== "init") {
+    return undefined;
+  }
+
+  const hostState = message.payload.hostState as ShellHostState;
+  const route = (message.payload.route ?? hostState.route) as
+    | ContentRoute
+    | undefined;
 
   return route === undefined ? { hostState } : { hostState, route };
 }
@@ -139,8 +145,12 @@ export function parseShellHostStateMessage(
     return undefined;
   }
 
-  const payload = recordAt(input, "payload");
-  return parseHostState(payload.hostState ?? payload);
+  const message = parseHostMessage(input);
+  if (message.type !== "host_state") {
+    return undefined;
+  }
+
+  return message.payload.hostState as ShellHostState;
 }
 
 export function parseContentRoute(input: unknown): ContentRoute | undefined {
@@ -148,186 +158,38 @@ export function parseContentRoute(input: unknown): ContentRoute | undefined {
     return undefined;
   }
 
-  if (!isRecord(input)) {
-    throw new ContentError("content route must be an object");
-  }
-
-  const view = input.view;
-  if (view === "dashboard") {
-    const workspaceId = stringAt(input, "workspaceId");
-    const laneId = optionalStringAt(input, "laneId");
-    const params = optionalJsonObjectAt(input, "params");
-
-    return {
-      view,
-      workspaceId,
-      ...(laneId === undefined ? {} : { laneId }),
-      ...(params === undefined ? {} : { params }),
-    };
-  }
-
-  if (view === "custom") {
-    const workspaceId = stringAt(input, "workspaceId");
-    const query = stringAt(input, "query");
-    const title = optionalStringAt(input, "title");
-    const params = optionalJsonObjectAt(input, "params");
-
-    return {
-      view,
-      workspaceId,
-      query,
-      ...(title === undefined ? {} : { title }),
-      ...(params === undefined ? {} : { params }),
-    };
-  }
-
-  throw new ContentError("content route view must be dashboard or custom");
-}
-
-function parseHostState(input: unknown): ShellHostState {
-  const state = recordAt({ state: input }, "state");
-  const pickerEnabled = booleanAt(state, "pickerEnabled");
-  const workspaceId = optionalStringAt(state, "workspaceId");
-  const centerQueryUrl = optionalStringAt(state, "centerQueryUrl");
-  const contentRevision = optionalStringAt(state, "contentRevision");
-  const route = parseContentRoute(state.route);
-
-  return {
-    pickerEnabled,
-    ...(workspaceId === undefined ? {} : { workspaceId }),
-    ...(centerQueryUrl === undefined ? {} : { centerQueryUrl }),
-    ...(contentRevision === undefined ? {} : { contentRevision }),
-    ...(route === undefined ? {} : { route }),
-  };
-}
-
-function optionalJsonObjectAt(
-  input: Record<string, unknown>,
-  key: string,
-): JsonObject | undefined {
-  const value = input[key];
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (!isRecord(value)) {
-    throw new ContentError(`${key} must be an object`);
-  }
-
-  return parseJsonObject(value, key, new WeakSet<object>());
-}
-
-function recordAt(input: Record<string, unknown>, key: string): JsonObject {
-  const value = input[key];
-  if (!isRecord(value)) {
-    throw new ContentError(`${key} must be an object`);
-  }
-
-  return value;
-}
-
-function stringAt(input: Record<string, unknown>, key: string): string {
-  const value = input[key];
-  if (typeof value !== "string") {
-    throw new ContentError(`${key} must be a string`);
-  }
-
-  return value;
-}
-
-function booleanAt(input: Record<string, unknown>, key: string): boolean {
-  const value = input[key];
-  if (typeof value !== "boolean") {
-    throw new ContentError(`${key} must be a boolean`);
-  }
-
-  return value;
-}
-
-function optionalStringAt(
-  input: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = input[key];
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== "string") {
-    throw new ContentError(`${key} must be a string`);
-  }
-
-  return value;
+  return parseProtocolRoute(input) as ContentRoute;
 }
 
 function isRecord(input: unknown): input is JsonObject {
-  return (
-    typeof input === "object" &&
-    input !== null &&
-    !Array.isArray(input) &&
-    Object.getPrototypeOf(input) === Object.prototype
-  );
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-function parseJsonObject(
-  input: unknown,
-  path: string,
-  activeContainers: WeakSet<object>,
-): JsonObject {
-  if (!isRecord(input)) {
-    throw new ContentError(`${path} must be an object`);
+function parseHostMessage(input: unknown) {
+  try {
+    return parseShellHostMessage(input);
+  } catch (error) {
+    throw contentErrorFromProtocol(error);
   }
-
-  if (activeContainers.has(input)) {
-    throw new ContentError(`${path} must be acyclic JSON`);
-  }
-
-  activeContainers.add(input);
-  for (const [key, value] of Object.entries(input)) {
-    assertJsonValue(value, `${path}.${key}`, activeContainers);
-  }
-  activeContainers.delete(input);
-
-  return input;
 }
 
-function assertJsonValue(
-  input: unknown,
-  path: string,
-  activeContainers: WeakSet<object>,
-): void {
-  if (
-    input === null ||
-    typeof input === "string" ||
-    typeof input === "boolean"
-  ) {
-    return;
+function parseProtocolRoute(input: unknown) {
+  try {
+    return parseShellHostContentRoute(input);
+  } catch (error) {
+    throw contentErrorFromProtocol(error);
   }
+}
 
-  if (typeof input === "number" && Number.isFinite(input)) {
-    return;
+function contentErrorFromProtocol(error: unknown): ContentError {
+  if (error instanceof ProtocolError) {
+    return new ContentError(
+      "shell host message is invalid",
+      JSON.stringify(error.diagnostics),
+    );
   }
-
-  if (Array.isArray(input)) {
-    if (activeContainers.has(input)) {
-      throw new ContentError(`${path} must be acyclic JSON`);
-    }
-
-    activeContainers.add(input);
-    for (let index = 0; index < input.length; index += 1) {
-      if (!(index in input)) {
-        throw new ContentError(`${path}.${index} must be JSON`);
-      }
-      assertJsonValue(input[index], `${path}.${index}`, activeContainers);
-    }
-    activeContainers.delete(input);
-    return;
+  if (error instanceof Error) {
+    return new ContentError(error.message);
   }
-
-  if (isRecord(input)) {
-    parseJsonObject(input, path, activeContainers);
-    return;
-  }
-
-  throw new ContentError(`${path} must be JSON`);
+  return new ContentError("shell host message is invalid");
 }

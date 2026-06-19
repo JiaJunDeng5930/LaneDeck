@@ -1,16 +1,22 @@
 import type { Diagnostic } from "@lanedeck/protocol";
+import type {
+  ShellHostContentRoute,
+  ShellHostMessage,
+  ShellHostState,
+} from "@lanedeck/protocol";
 
 import type { CurrentContentDescriptor } from "./center";
 
-export type ShellToContentMessage = {
-  type: "picker_mode";
-  payload: { enabled: boolean };
-};
+export type ShellToContentMessage = ShellHostMessage;
+
+export type ContentHostState = ShellHostState;
 
 export interface ContentFrameHost {
   setSource(uri: string): void;
   postMessage(message: ShellToContentMessage): void;
   setHeight(height: number): void;
+  onLoad?(listener: () => void): () => void;
+  waitForLoad?(): Promise<void>;
   close(): Promise<void> | void;
 }
 
@@ -20,6 +26,7 @@ export interface LoadedContentSession {
   revision: string;
   uri: string;
   reloadCount: number;
+  hostState?: ContentHostState;
   postMessage(message: ShellToContentMessage): void;
   setHeight(height: number): void;
   close(): Promise<void>;
@@ -35,7 +42,10 @@ export interface ContentLoadFailure {
 export type ContentSession = LoadedContentSession | ContentLoadFailure;
 
 export interface ContentLoader {
-  loadCurrent(descriptor: CurrentContentDescriptor): Promise<ContentSession>;
+  loadCurrent(
+    descriptor: CurrentContentDescriptor,
+    hostState?: ContentHostState,
+  ): Promise<ContentSession>;
   setPickerMode(enabled: boolean): void;
   setHeight(height: number): void;
   close(): Promise<void>;
@@ -46,21 +56,25 @@ export function createIframeContentLoader(
 ): ContentLoader {
   let activeSession: LoadedContentSession | undefined;
   let reloadCount = 0;
+  let pendingLoadCleanup: (() => void) | undefined;
 
   return {
     async loadCurrent(
       descriptor: CurrentContentDescriptor,
+      hostState = defaultHostState(descriptor),
     ): Promise<ContentSession> {
       try {
+        pendingLoadCleanup?.();
+        pendingLoadCleanup = undefined;
         reloadCount += 1;
         const uri = contentUriFor(descriptor);
-        host.setSource(uri);
-        activeSession = {
+        const session: LoadedContentSession = {
           status: "ready",
           descriptor,
           revision: descriptor.revision,
           uri,
           reloadCount,
+          hostState,
           postMessage(message: ShellToContentMessage) {
             host.postMessage(message);
           },
@@ -68,24 +82,57 @@ export function createIframeContentLoader(
             host.setHeight(height);
           },
           async close() {
+            if (activeSession === this) {
+              pendingLoadCleanup?.();
+              pendingLoadCleanup = undefined;
+              activeSession = undefined;
+            }
             await host.close();
           },
         };
-        return activeSession;
+        activeSession = session;
+        const sendInit = () => {
+          if (activeSession === session) {
+            session.postMessage({
+              type: "init",
+              payload: { hostState },
+            });
+          }
+        };
+        host.setSource(uri);
+        await waitForFrameLoad(host, (cleanup) => {
+          pendingLoadCleanup = cleanup;
+        });
+        if (pendingLoadCleanup !== undefined) {
+          pendingLoadCleanup = undefined;
+        }
+        if (activeSession === session) {
+          sendInit();
+        }
+        return session;
       } catch (error) {
         return contentLoadFailure(error, descriptor);
       }
     },
     setPickerMode(enabled: boolean): void {
-      activeSession?.postMessage({
-        type: "picker_mode",
-        payload: { enabled },
+      if (activeSession === undefined) {
+        return;
+      }
+      activeSession.hostState = {
+        ...activeSession.hostState,
+        pickerEnabled: enabled,
+      };
+      activeSession.postMessage({
+        type: "host_state",
+        payload: { hostState: activeSession.hostState },
       });
     },
     setHeight(height: number): void {
       activeSession?.setHeight(height);
     },
     async close(): Promise<void> {
+      pendingLoadCleanup?.();
+      pendingLoadCleanup = undefined;
       activeSession = undefined;
       await host.close();
     },
@@ -103,6 +150,15 @@ export function createIframeHost(
     postMessage(message: ShellToContentMessage): void {
       iframe.contentWindow?.postMessage(message, targetOrigin);
     },
+    waitForLoad(): Promise<void> {
+      return new Promise((resolve) => {
+        const listener = () => {
+          iframe.removeEventListener("load", listener);
+          resolve();
+        };
+        iframe.addEventListener("load", listener);
+      });
+    },
     setHeight(height: number): void {
       iframe.style.height = `${Math.max(0, Math.ceil(height))}px`;
     },
@@ -110,6 +166,50 @@ export function createIframeHost(
       iframe.removeAttribute("src");
     },
   };
+}
+
+export function defaultHostState(
+  descriptor: CurrentContentDescriptor,
+): ContentHostState {
+  const hostDescriptor = descriptor as CurrentContentDescriptor &
+    Partial<ContentHostState>;
+  return {
+    pickerEnabled: false,
+    workspaceId: descriptor.workspaceId,
+    contentRevision: descriptor.revision,
+    ...(hostDescriptor.centerQueryUrl === undefined
+      ? {}
+      : { centerQueryUrl: hostDescriptor.centerQueryUrl }),
+    ...(hostDescriptor.centerReadToken === undefined
+      ? {}
+      : { centerReadToken: hostDescriptor.centerReadToken }),
+    route: hostDescriptor.route ?? dashboardRoute(descriptor.workspaceId),
+  };
+}
+
+export function dashboardRoute(workspaceId: string): ShellHostContentRoute {
+  return { view: "dashboard", workspaceId };
+}
+
+async function waitForFrameLoad(
+  host: ContentFrameHost,
+  onCleanup: (cleanup: () => void) => void,
+): Promise<void> {
+  if (host.waitForLoad !== undefined) {
+    await host.waitForLoad();
+    return;
+  }
+  if (host.onLoad !== undefined) {
+    await new Promise<void>((resolve) => {
+      let cleanup: () => void = () => undefined;
+      cleanup =
+        host.onLoad?.(() => {
+          cleanup();
+          resolve();
+        }) ?? (() => undefined);
+      onCleanup(cleanup);
+    });
+  }
 }
 
 export function contentUriFor(descriptor: CurrentContentDescriptor): string {

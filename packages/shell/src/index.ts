@@ -20,6 +20,7 @@ export {
 } from "./center";
 export type {
   ContentFrameHost,
+  ContentHostState,
   ContentLoadFailure,
   ContentLoader,
   ContentSession,
@@ -31,6 +32,8 @@ export {
   contentUriFor,
   createIframeContentLoader,
   createIframeHost,
+  dashboardRoute,
+  defaultHostState,
 } from "./content";
 export type { ClipboardWriter, PickCopyResult } from "./picker";
 export { PickerController, createNavigatorClipboardWriter } from "./picker";

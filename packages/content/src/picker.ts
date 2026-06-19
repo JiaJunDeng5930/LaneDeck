@@ -1,3 +1,5 @@
+import { ContentError } from "./errors";
+
 export interface PickTarget {
   pickId: string;
   element: HTMLElement;
@@ -24,6 +26,7 @@ export function setPickerListening(enabled: boolean): void {
 }
 
 export function registerPickTarget(target: PickTarget): PickRegistration {
+  validatePickId(target.pickId);
   registeredElements.add(target.element);
   target.element.setAttribute("data-pick-id", target.pickId);
 
@@ -78,5 +81,18 @@ export function subscribePickTargets(listener: PickListener): PickRegistration {
 function notifyPickTarget(target: PickTarget): void {
   for (const listener of pickListeners) {
     listener(target);
+  }
+}
+
+function validatePickId(pickId: string): void {
+  const separator = pickId.indexOf("#");
+  if (
+    pickId.trim() !== pickId ||
+    separator <= 0 ||
+    separator === pickId.length - 1
+  ) {
+    throw new ContentError(
+      "pick id must be shaped as <sourcePath>#<localTarget>",
+    );
   }
 }

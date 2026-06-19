@@ -12,7 +12,9 @@ import type {
 } from "./center";
 import {
   contentLoadFailure,
+  dashboardRoute,
   type ContentLoader,
+  type ContentHostState,
   type ContentSession,
   type LoadedContentSession,
 } from "./content";
@@ -87,7 +89,10 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       if (isStaleGeneration(generation)) {
         return contentLoadFailure(new Error("shell is stopped"), descriptor);
       }
-      const session = await deps.contentLoader.loadCurrent(descriptor);
+      const session = await deps.contentLoader.loadCurrent(
+        descriptor,
+        hostStateFor(descriptor),
+      );
       if (isStaleGeneration(generation)) {
         if (session.status === "ready") {
           await session.close();
@@ -287,6 +292,26 @@ export function createShellApp(deps: ShellDeps): ShellApp {
 
   function isStaleGeneration(generation: number): boolean {
     return state === "Stopped" || generation !== lifecycleGeneration;
+  }
+
+  function hostStateFor(
+    descriptor: LoadedContentSession["descriptor"],
+  ): ContentHostState {
+    const access = deps.center.getContentQueryAccess?.();
+    const centerQueryUrl = descriptor.centerQueryUrl ?? access?.queryUrl;
+    const centerReadToken = descriptor.centerReadToken ?? access?.readToken;
+    return {
+      pickerEnabled: picker.isEnabled(),
+      workspaceId: descriptor.workspaceId,
+      contentRevision: descriptor.revision,
+      route: descriptor.route ?? dashboardRoute(descriptor.workspaceId),
+      ...(centerQueryUrl === undefined
+        ? {}
+        : {
+            centerQueryUrl,
+            ...(centerReadToken === undefined ? {} : { centerReadToken }),
+          }),
+    };
   }
 
   async function finishPickerCopy(result: PickCopyResult): Promise<void> {

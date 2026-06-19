@@ -196,6 +196,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
     if (state.centerQueryUrl !== undefined) {
       deps.query.setQueryUrl?.(state.centerQueryUrl);
     }
+    deps.query.setReadToken?.(state.centerReadToken);
   }
 
   return app;

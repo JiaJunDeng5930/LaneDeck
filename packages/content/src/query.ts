@@ -9,10 +9,12 @@ import { ContentError } from "./errors";
 export interface CenterQueryClient {
   query(request: QueryRequest): Promise<QueryResponse>;
   setQueryUrl?(queryUrl: string): void;
+  setReadToken?(readToken: string | undefined): void;
 }
 
 export interface HttpCenterQueryClientOptions {
   queryUrl?: string;
+  readToken?: string;
   fetch?: typeof fetch;
   headers?: HeadersInit;
 }
@@ -22,10 +24,15 @@ export function createHttpCenterQueryClient(
 ): CenterQueryClient {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   let queryUrl = options.queryUrl;
+  let readToken = options.readToken;
 
   return {
     setQueryUrl(nextQueryUrl) {
       queryUrl = nextQueryUrl;
+    },
+
+    setReadToken(nextReadToken) {
+      readToken = nextReadToken;
     },
 
     async query(request) {
@@ -35,6 +42,9 @@ export function createHttpCenterQueryClient(
 
       const headers = new Headers(options.headers);
       headers.set("content-type", "application/json");
+      if (readToken !== undefined && readToken.trim().length > 0) {
+        headers.set("authorization", `Bearer ${readToken}`);
+      }
 
       const response = await fetchImpl(queryUrl, {
         method: "POST",
@@ -56,7 +66,7 @@ export function createHttpCenterQueryClient(
 export function dashboardQueryRequest(route: ContentRoute): QueryRequest {
   return {
     workspaceId: route.workspaceId,
-    query: route.view === "dashboard" ? "dashboard" : route.query,
+    query: route.view === "dashboard" ? "current_state" : route.query,
     params:
       route.view === "dashboard"
         ? dashboardParams(route)
@@ -76,19 +86,14 @@ function parseQueryResponse(input: unknown): QueryResponse {
     throw new ContentError("center query response must be an object");
   }
 
-  if (!Array.isArray(input.rows)) {
-    throw new ContentError("center query response rows must be an array");
-  }
-
-  if (!Array.isArray(input.diagnostics)) {
-    throw new ContentError(
-      "center query response diagnostics must be an array",
-    );
-  }
+  const rows = denseArray(input.rows, "rows");
+  const diagnostics = denseArray(input.diagnostics, "diagnostics");
 
   return {
-    rows: input.rows.map((row, index) => parseJsonObject(row, `rows.${index}`)),
-    diagnostics: input.diagnostics.map((diagnostic, index) => {
+    rows: rows.map((row, index) =>
+      parseJsonObject(row, `rows.${index}`, new WeakSet<object>()),
+    ),
+    diagnostics: diagnostics.map((diagnostic, index) => {
       if (!isRecord(diagnostic)) {
         throw new ContentError(`diagnostics.${index} must be an object`);
       }
@@ -110,19 +115,44 @@ function parseQueryResponse(input: unknown): QueryResponse {
   };
 }
 
-function parseJsonObject(input: unknown, path: string): JsonObject {
+function denseArray(input: unknown, path: string): unknown[] {
+  if (!Array.isArray(input)) {
+    throw new ContentError(`center query response ${path} must be an array`);
+  }
+  for (let index = 0; index < input.length; index += 1) {
+    if (!(index in input)) {
+      throw new ContentError(`${path}.${index} must be JSON`);
+    }
+  }
+  return Array.from(input);
+}
+
+function parseJsonObject(
+  input: unknown,
+  path: string,
+  activeContainers: WeakSet<object>,
+): JsonObject {
   if (!isRecord(input)) {
     throw new ContentError(`${path} must be an object`);
   }
 
-  for (const [key, value] of Object.entries(input)) {
-    assertJsonValue(value, `${path}.${key}`);
+  if (activeContainers.has(input)) {
+    throw new ContentError(`${path} must be acyclic JSON`);
   }
+  activeContainers.add(input);
+  for (const [key, value] of Object.entries(input)) {
+    assertJsonValue(value, `${path}.${key}`, activeContainers);
+  }
+  activeContainers.delete(input);
 
   return input;
 }
 
-function assertJsonValue(input: unknown, path: string): void {
+function assertJsonValue(
+  input: unknown,
+  path: string,
+  activeContainers: WeakSet<object>,
+): void {
   if (
     input === null ||
     typeof input === "string" ||
@@ -136,12 +166,20 @@ function assertJsonValue(input: unknown, path: string): void {
   }
 
   if (Array.isArray(input)) {
-    input.forEach((item, index) => assertJsonValue(item, `${path}.${index}`));
+    if (activeContainers.has(input)) {
+      throw new ContentError(`${path} must be acyclic JSON`);
+    }
+    activeContainers.add(input);
+    const array = denseArray(input, path);
+    array.forEach((item, index) =>
+      assertJsonValue(item, `${path}.${index}`, activeContainers),
+    );
+    activeContainers.delete(input);
     return;
   }
 
   if (isRecord(input)) {
-    parseJsonObject(input, path);
+    parseJsonObject(input, path, activeContainers);
     return;
   }
 

@@ -149,6 +149,45 @@ export type ShellContentMessage =
       payload: { height: number };
     };
 
+export type ShellHostContentRoute =
+  | {
+      view: "dashboard";
+      workspaceId: string;
+      laneId?: string;
+      params?: JsonObject;
+    }
+  | {
+      view: "custom";
+      workspaceId: string;
+      query: string;
+      title?: string;
+      params?: JsonObject;
+    };
+
+export interface ShellHostState {
+  pickerEnabled: boolean;
+  workspaceId?: string;
+  centerQueryUrl?: string;
+  centerReadToken?: string;
+  contentRevision?: string;
+  route?: ShellHostContentRoute;
+}
+
+export type ShellHostMessage =
+  | {
+      type: "init";
+      payload: {
+        hostState: ShellHostState;
+        route?: ShellHostContentRoute;
+      };
+    }
+  | {
+      type: "host_state";
+      payload: {
+        hostState: ShellHostState;
+      };
+    };
+
 export type AgentControlMessage =
   | {
       type: "reload_lane_config";
@@ -325,6 +364,72 @@ export function parseShellContentMessage(input: unknown): ShellContentMessage {
   throw new Error("unreachable");
 }
 
+export function parseShellHostMessage(input: unknown): ShellHostMessage {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const type = validator.string(object.type, "type");
+  const payload = validator.object(object.payload, "payload");
+
+  if (type === "init") {
+    const message: ShellHostMessage = {
+      type,
+      payload: {
+        hostState: parseShellHostStateWithValidator(
+          payload.hostState,
+          "payload.hostState",
+          validator,
+        ),
+        ...(payload.route === undefined
+          ? {}
+          : {
+              route: parseShellHostContentRouteWithValidator(
+                payload.route,
+                "payload.route",
+                validator,
+              ),
+            }),
+      },
+    };
+    validator.finish();
+    return message;
+  }
+
+  if (type === "host_state") {
+    const message: ShellHostMessage = {
+      type,
+      payload: {
+        hostState: parseShellHostStateWithValidator(
+          payload.hostState,
+          "payload.hostState",
+          validator,
+        ),
+      },
+    };
+    validator.finish();
+    return message;
+  }
+
+  validator.add("type", "expected init or host_state");
+  validator.finish();
+  throw new Error("unreachable");
+}
+
+export function parseShellHostState(input: unknown): ShellHostState {
+  const validator = new Validator();
+  const state = parseShellHostStateWithValidator(input, "$", validator);
+  validator.finish();
+  return state;
+}
+
+export function parseShellHostContentRoute(
+  input: unknown,
+): ShellHostContentRoute {
+  const validator = new Validator();
+  const route = parseShellHostContentRouteWithValidator(input, "$", validator);
+  validator.finish();
+  return route;
+}
+
 export function parseAgentControlMessage(input: unknown): AgentControlMessage {
   const validator = new Validator();
   const object = validator.object(input, "$");
@@ -409,6 +514,136 @@ function parseContentBuildArtifact(
           ),
         }),
   };
+}
+
+function parseShellHostStateWithValidator(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): ShellHostState {
+  const object = validator.object(input, path);
+  return {
+    pickerEnabled: booleanWithValidator(
+      object.pickerEnabled,
+      joinPath(path, "pickerEnabled"),
+      validator,
+    ),
+    ...(object.workspaceId === undefined
+      ? {}
+      : {
+          workspaceId: validator.string(
+            object.workspaceId,
+            joinPath(path, "workspaceId"),
+          ),
+        }),
+    ...(object.centerQueryUrl === undefined
+      ? {}
+      : {
+          centerQueryUrl: validator.string(
+            object.centerQueryUrl,
+            joinPath(path, "centerQueryUrl"),
+          ),
+        }),
+    ...(object.centerReadToken === undefined
+      ? {}
+      : {
+          centerReadToken: validator.string(
+            object.centerReadToken,
+            joinPath(path, "centerReadToken"),
+          ),
+        }),
+    ...(object.contentRevision === undefined
+      ? {}
+      : {
+          contentRevision: validator.string(
+            object.contentRevision,
+            joinPath(path, "contentRevision"),
+          ),
+        }),
+    ...(object.route === undefined
+      ? {}
+      : {
+          route: parseShellHostContentRouteWithValidator(
+            object.route,
+            joinPath(path, "route"),
+            validator,
+          ),
+        }),
+  };
+}
+
+function parseShellHostContentRouteWithValidator(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): ShellHostContentRoute {
+  const object = validator.object(input, path);
+  const view = validator.string(object.view, joinPath(path, "view"));
+
+  if (view === "dashboard") {
+    return {
+      view,
+      workspaceId: validator.string(
+        object.workspaceId,
+        joinPath(path, "workspaceId"),
+      ),
+      ...(object.laneId === undefined
+        ? {}
+        : {
+            laneId: validator.string(object.laneId, joinPath(path, "laneId")),
+          }),
+      ...(object.params === undefined
+        ? {}
+        : {
+            params: validator.jsonObject(
+              object.params,
+              joinPath(path, "params"),
+            ),
+          }),
+    };
+  }
+
+  if (view === "custom") {
+    return {
+      view,
+      workspaceId: validator.string(
+        object.workspaceId,
+        joinPath(path, "workspaceId"),
+      ),
+      query: validator.string(object.query, joinPath(path, "query")),
+      ...(object.title === undefined
+        ? {}
+        : {
+            title: validator.string(object.title, joinPath(path, "title")),
+          }),
+      ...(object.params === undefined
+        ? {}
+        : {
+            params: validator.jsonObject(
+              object.params,
+              joinPath(path, "params"),
+            ),
+          }),
+    };
+  }
+
+  validator.add(joinPath(path, "view"), "expected dashboard or custom");
+  return {
+    view: "dashboard",
+    workspaceId: "",
+  };
+}
+
+function booleanWithValidator(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): boolean {
+  if (typeof input === "boolean") {
+    return input;
+  }
+  validator.add(path, "expected boolean");
+  return false;
 }
 
 function parseLaneConfigWithValidator(

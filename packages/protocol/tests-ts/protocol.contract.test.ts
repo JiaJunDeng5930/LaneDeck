@@ -8,6 +8,7 @@ import {
   parseIngestBatch,
   parseLaneConfig,
   parseShellContentMessage,
+  parseShellHostMessage,
 } from "../src/index";
 
 const validCountFrame = {
@@ -236,6 +237,61 @@ describe("protocol wire contract", () => {
     { type: "error_report", payload: { message: "render failed" } },
   ])("accepts shell-content message $type", (message) => {
     expect(parseShellContentMessage(message)).toMatchObject(message);
+  });
+
+  it("accepts shell host init messages with query access and route", () => {
+    expect(
+      parseShellHostMessage({
+        type: "init",
+        payload: {
+          hostState: {
+            pickerEnabled: false,
+            workspaceId: "workspace.local",
+            contentRevision: "rev-1",
+            centerQueryUrl: "https://center.example/api/query",
+            centerReadToken: "read-token",
+            route: {
+              view: "dashboard",
+              workspaceId: "workspace.local",
+              laneId: "lane.build",
+              params: { limit: 10 },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      type: "init",
+      payload: {
+        hostState: {
+          centerReadToken: "read-token",
+          route: {
+            view: "dashboard",
+            workspaceId: "workspace.local",
+            laneId: "lane.build",
+            params: { limit: 10 },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects shell host messages with invalid JSON route params", () => {
+    expect(() =>
+      parseShellHostMessage({
+        type: "host_state",
+        payload: {
+          hostState: {
+            pickerEnabled: true,
+            route: {
+              view: "custom",
+              workspaceId: "workspace.local",
+              query: "current_state",
+              params: { limit: Number.NaN },
+            },
+          },
+        },
+      }),
+    ).toThrow(ProtocolError);
   });
 
   it("accepts agent build control messages", () => {

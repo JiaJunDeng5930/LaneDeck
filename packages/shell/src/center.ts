@@ -12,6 +12,14 @@ export interface CurrentContentDescriptor {
   revision: string;
   path: string;
   uri?: string;
+  centerQueryUrl?: string;
+  centerReadToken?: string;
+  route?: {
+    view: "dashboard";
+    workspaceId: string;
+    laneId?: string;
+    params?: JsonObject;
+  };
 }
 
 export interface ProtocolDiagnosticRecord {
@@ -20,9 +28,15 @@ export interface ProtocolDiagnosticRecord {
   receivedAt: string;
 }
 
+export interface CenterQueryAccess {
+  queryUrl: string;
+  readToken?: string;
+}
+
 export interface CenterQueryClient {
   getCurrentContent(): Promise<CurrentContentDescriptor>;
   recordProtocolDiagnostic(record: ProtocolDiagnosticRecord): Promise<void>;
+  getContentQueryAccess?(): CenterQueryAccess;
 }
 
 export interface CenterMutationClient {
@@ -97,13 +111,14 @@ export function createHttpCenterClient(
 } {
   const fetcher = options.fetch ?? globalThis.fetch;
   const baseUrl = normalizeBaseUrl(options.baseUrl);
+  const queryUrl = new URL("/api/query", baseUrl).toString();
   const reportProtocolDiagnostic =
     options.reportProtocolDiagnostic ?? (async () => undefined);
 
   async function query(request: QueryRequest): Promise<QueryResponse> {
     return postJson<QueryResponse>(
       fetcher,
-      new URL("/api/query", baseUrl),
+      new URL(queryUrl),
       {
         workspaceId: request.workspaceId,
         query: request.query,
@@ -125,12 +140,25 @@ export function createHttpCenterClient(
       if (row === undefined) {
         throw new CenterClientError("center returned no current content row");
       }
-      return descriptorFromRow(options.workspaceId, row);
+      return descriptorFromRow(options.workspaceId, row, {
+        queryUrl,
+        ...(options.readToken === undefined || options.readToken.trim() === ""
+          ? {}
+          : { readToken: options.readToken }),
+      });
     },
     async recordProtocolDiagnostic(
       record: ProtocolDiagnosticRecord,
     ): Promise<void> {
       await reportProtocolDiagnostic(record);
+    },
+    getContentQueryAccess(): CenterQueryAccess {
+      return {
+        queryUrl,
+        ...(options.readToken === undefined || options.readToken.trim() === ""
+          ? {}
+          : { readToken: options.readToken }),
+      };
     },
   };
 }
@@ -249,6 +277,7 @@ export function centerLiveUrl(
 function descriptorFromRow(
   workspaceId: string,
   row: JsonObject,
+  access?: CenterQueryAccess,
 ): CurrentContentDescriptor {
   const revision = readAliasedString(row, [
     ["revision", "revision"],
@@ -260,7 +289,20 @@ function descriptorFromRow(
       ["path", "path"],
     ]) ?? "index.html";
   const uri = readOptionalString(row.uri, "uri");
-  return { workspaceId, revision, path, ...(uri === undefined ? {} : { uri }) };
+  return {
+    workspaceId,
+    revision,
+    path,
+    ...(uri === undefined ? {} : { uri }),
+    ...(access === undefined
+      ? {}
+      : {
+          centerQueryUrl: access.queryUrl,
+          ...(access.readToken === undefined
+            ? {}
+            : { centerReadToken: access.readToken }),
+        }),
+  };
 }
 
 async function postJson<T>(
