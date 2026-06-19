@@ -63,9 +63,12 @@ function requiredCapabilities(args) {
       required.add("centerHttpUrl");
       required.add("shellHttpUrl");
       required.add("shellContentBaseUrl");
+      required.add("shellContentArtifactWriteUrl");
       required.add("liveWsUrl");
       required.add("agentSpoolObservationUrl");
       required.add("readToken");
+      required.add("aiMutationToken");
+      required.add("agentToken");
     }
 
     if (spec.includes("content-mutation-flow")) {

@@ -31,7 +31,7 @@ The scenarios use `LANEDECK_READ_TOKEN` for center query reads, `LANEDECK_AI_MUT
 
 ## Scenario Files
 
-- `specs/agent-to-center-flow.spec.ts` covers count-triggered ingest, live update, shell/content visibility, spool ack observation, and time-triggered quiet-signal ingest.
+- `specs/agent-to-center-flow.spec.ts` covers count-triggered ingest, live update, shell/content visibility, spool ack observation, and time-triggered quiet-signal ingest. It seeds dashboard-capable current content before opening the shell, so a fresh center has the current-content pointer required by shell rendering.
 - `specs/content-mutation-flow.spec.ts` covers picker-id based content mutation, content revision observation, shell iframe reload, and patched content visibility.
 
 The tests use `@lanedeck/protocol` validators for fixture construction. Scenario requests target public HTTP, WSS, shell, and iframe surfaces.

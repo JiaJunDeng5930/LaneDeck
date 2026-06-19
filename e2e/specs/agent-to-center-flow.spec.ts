@@ -7,6 +7,7 @@ import {
   makeCountTriggeredAgentInput,
   makeTimeTriggeredQuietSignalAgentInput,
 } from "../support/contract-fixtures";
+import { promoteE2EDashboardContent } from "../support/content-seed";
 import {
   apiUrl,
   bearerHeaders,
@@ -24,9 +25,12 @@ const readiness = readHarnessReadiness([
   "centerHttpUrl",
   "shellHttpUrl",
   "shellContentBaseUrl",
+  "shellContentArtifactWriteUrl",
   "liveWsUrl",
   "agentSpoolObservationUrl",
   "readToken",
+  "aiMutationToken",
+  "agentToken",
 ]);
 
 test.describe("agent ingest to dashboard", () => {
@@ -42,9 +46,12 @@ test.describe("agent ingest to dashboard", () => {
       agentSourceInputUrl,
       centerHttpUrl,
       shellHttpUrl,
+      shellContentArtifactWriteUrl,
       liveWsUrl,
       agentSpoolObservationUrl,
       readToken,
+      aiMutationToken,
+      agentToken,
     } = readiness.harness;
 
     const liveObserver = await connectJsonMessageObserver(
@@ -108,6 +115,15 @@ test.describe("agent ingest to dashboard", () => {
         recordCount: 1,
       });
       expect(JSON.stringify(countFrame?.summary ?? {})).toContain(e2eEventText);
+
+      await promoteE2EDashboardContent({
+        request,
+        workspaceId: workspaceId!,
+        centerHttpUrl: centerHttpUrl!,
+        shellContentArtifactWriteUrl: shellContentArtifactWriteUrl!,
+        aiMutationToken: aiMutationToken!,
+        agentToken: agentToken!,
+      });
 
       await page.goto(shellHttpUrl!);
       await expect(
