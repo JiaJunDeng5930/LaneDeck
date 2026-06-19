@@ -16,6 +16,6 @@
 
 - `start()` attempts the live connection and always performs the first content load attempt.
 - `content_changed` live events enqueue a content reload.
-- Picker mode forwards `{ type: "picker_mode" }` to the active content session.
+- Picker mode forwards full `{ type: "host_state" }` messages to the active content session.
 - `pick_result` copies the pick id, clears picker mode, and returns to content-ready state.
 - Invalid shell-content messages are parsed through `@lanedeck/protocol` and recorded as protocol diagnostics.
