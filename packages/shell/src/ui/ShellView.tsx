@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   centerLiveUrl,
+  contentMessageOriginPolicyForUri,
   createBrowserDiagnosticReporter,
   createHttpCenterClient,
   createIframeContentLoader,
@@ -9,7 +10,6 @@ import {
   createNavigatorClipboardWriter,
   createShellApp,
   createWebSocketLiveClient,
-  targetOriginForContentUri,
   type ShellApp,
 } from "../index";
 
@@ -144,5 +144,9 @@ export function isAllowedContentOrigin(
   origin: string,
   contentSource: string,
 ): boolean {
-  return origin === targetOriginForContentUri(contentSource);
+  return (
+    contentMessageOriginPolicyForUri(contentSource)?.acceptedOrigins.includes(
+      origin,
+    ) ?? false
+  );
 }

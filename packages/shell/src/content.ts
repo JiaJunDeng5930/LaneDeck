@@ -11,6 +11,12 @@ export type ShellToContentMessage = ShellHostMessage;
 
 export type ContentHostState = ShellHostState;
 
+export interface ContentMessageOriginPolicy {
+  strictTargetOrigins: string[];
+  tokenFreeTargetOrigins: string[];
+  acceptedOrigins: string[];
+}
+
 export interface ContentFrameHost {
   setSource(uri: string): void;
   postMessage(message: ShellToContentMessage): void;
@@ -294,14 +300,16 @@ export function createIframeHost(
   iframe: HTMLIFrameElement,
   targetOrigin = "*",
 ): ContentFrameHost {
-  let currentTargetOrigin = targetOrigin;
+  let currentOriginPolicy = fallbackOriginPolicy(targetOrigin);
   return {
     setSource(uri: string): void {
       iframe.src = uri;
-      currentTargetOrigin = targetOriginForContentUri(uri) ?? targetOrigin;
+      currentOriginPolicy =
+        contentMessageOriginPolicyForUri(uri) ??
+        fallbackOriginPolicy(targetOrigin);
     },
     postMessage(message: ShellToContentMessage): void {
-      iframe.contentWindow?.postMessage(message, currentTargetOrigin);
+      postFrameMessage(iframe, message, currentOriginPolicy);
     },
     onLoad(listener: () => void): () => void {
       iframe.addEventListener("load", listener);
@@ -326,18 +334,98 @@ export function createIframeHost(
 }
 
 export function targetOriginForContentUri(uri: string): string | undefined {
+  return contentMessageOriginPolicyForUri(uri)?.strictTargetOrigins[0];
+}
+
+export function contentMessageOriginPolicyForUri(
+  uri: string,
+): ContentMessageOriginPolicy | undefined {
   try {
     const parsed = new URL(uri);
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed.origin;
+      return {
+        strictTargetOrigins: [parsed.origin],
+        tokenFreeTargetOrigins: [parsed.origin],
+        acceptedOrigins: [parsed.origin],
+      };
     }
     if (parsed.protocol === "lanedeck:" && parsed.host.length > 0) {
-      return "http://lanedeck.localhost";
+      const strictTargetOrigins = [
+        "http://lanedeck.localhost",
+        "https://lanedeck.localhost",
+        "lanedeck://localhost",
+      ];
+      return {
+        strictTargetOrigins,
+        tokenFreeTargetOrigins: ["*"],
+        acceptedOrigins: [...strictTargetOrigins, "null"],
+      };
     }
   } catch {
     return undefined;
   }
   return undefined;
+}
+
+function fallbackOriginPolicy(
+  targetOrigin: string,
+): ContentMessageOriginPolicy {
+  return {
+    strictTargetOrigins: [targetOrigin],
+    tokenFreeTargetOrigins: [targetOrigin],
+    acceptedOrigins: targetOrigin === "*" ? [] : [targetOrigin],
+  };
+}
+
+function postFrameMessage(
+  iframe: HTMLIFrameElement,
+  message: ShellToContentMessage,
+  policy: ContentMessageOriginPolicy,
+): void {
+  const contentWindow = iframe.contentWindow;
+  if (contentWindow === null) {
+    return;
+  }
+
+  if (messageCarriesReadToken(message)) {
+    const tokenFreeMessage = stripReadToken(message);
+    for (const targetOrigin of uniqueOrigins(policy.tokenFreeTargetOrigins)) {
+      if (!policy.strictTargetOrigins.includes(targetOrigin)) {
+        contentWindow.postMessage(tokenFreeMessage, targetOrigin);
+      }
+    }
+    for (const targetOrigin of uniqueOrigins(policy.strictTargetOrigins)) {
+      contentWindow.postMessage(message, targetOrigin);
+    }
+    return;
+  }
+
+  for (const targetOrigin of uniqueOrigins(policy.tokenFreeTargetOrigins)) {
+    contentWindow.postMessage(message, targetOrigin);
+  }
+}
+
+function messageCarriesReadToken(message: ShellToContentMessage): boolean {
+  return message.payload.hostState.centerReadToken !== undefined;
+}
+
+function stripReadToken(message: ShellToContentMessage): ShellToContentMessage {
+  if (!messageCarriesReadToken(message)) {
+    return message;
+  }
+  const hostState = { ...message.payload.hostState };
+  delete hostState.centerReadToken;
+  return {
+    ...message,
+    payload: {
+      ...message.payload,
+      hostState,
+    },
+  };
+}
+
+function uniqueOrigins(origins: string[]): string[] {
+  return Array.from(new Set(origins));
 }
 
 export function defaultHostState(

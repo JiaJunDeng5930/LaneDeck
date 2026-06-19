@@ -5,6 +5,7 @@ import type {
   MutationResult,
   QueryRequest,
   QueryResponse,
+  ShellHostContentRoute,
 } from "@lanedeck/protocol";
 
 export interface CurrentContentDescriptor {
@@ -14,12 +15,7 @@ export interface CurrentContentDescriptor {
   uri?: string;
   centerQueryUrl?: string;
   centerReadToken?: string;
-  route?: {
-    view: "dashboard";
-    workspaceId: string;
-    laneId?: string;
-    params?: JsonObject;
-  };
+  route?: ShellHostContentRoute;
 }
 
 export interface ProtocolDiagnosticRecord {

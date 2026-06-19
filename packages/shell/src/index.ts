@@ -30,6 +30,7 @@ export type {
 } from "./content";
 export {
   canShareCenterReadToken,
+  contentMessageOriginPolicyForUri,
   contentLoadFailure,
   contentUriFor,
   createIframeContentLoader,
