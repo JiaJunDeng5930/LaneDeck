@@ -20,6 +20,10 @@ export interface ContentFrameHost {
   close(): Promise<void> | void;
 }
 
+export interface IframeContentLoaderOptions {
+  loadTimeoutMs?: number;
+}
+
 export interface LoadedContentSession {
   status: "ready";
   descriptor: CurrentContentDescriptor;
@@ -53,12 +57,14 @@ export interface ContentLoader {
 
 export function createIframeContentLoader(
   host: ContentFrameHost,
+  options: IframeContentLoaderOptions = {},
 ): ContentLoader {
   let activeSession: LoadedContentSession | undefined;
   let pendingSession: LoadedContentSession | undefined;
   let reloadCount = 0;
   let pendingLoadCleanup: (() => void) | undefined;
   let pendingInitCleanup: (() => void) | undefined;
+  const loadTimeoutMs = options.loadTimeoutMs ?? 5_000;
 
   return {
     async loadCurrent(
@@ -121,7 +127,7 @@ export function createIframeContentLoader(
         };
         host.setSource(uri);
         pendingInitCleanup = startInitRetry(sendInit);
-        await waitForFrameLoad(host, (cleanup) => {
+        await waitForFrameLoad(host, loadTimeoutMs, (cleanup) => {
           pendingLoadCleanup = cleanup;
         });
         if (pendingLoadCleanup !== undefined) {
@@ -221,6 +227,10 @@ export function createIframeHost(
     postMessage(message: ShellToContentMessage): void {
       iframe.contentWindow?.postMessage(message, targetOrigin);
     },
+    onLoad(listener: () => void): () => void {
+      iframe.addEventListener("load", listener);
+      return () => iframe.removeEventListener("load", listener);
+    },
     waitForLoad(): Promise<void> {
       return new Promise((resolve) => {
         const listener = () => {
@@ -251,7 +261,8 @@ export function defaultHostState(
     ...(hostDescriptor.centerQueryUrl === undefined
       ? {}
       : { centerQueryUrl: hostDescriptor.centerQueryUrl }),
-    ...(hostDescriptor.centerReadToken === undefined
+    ...(hostDescriptor.centerReadToken === undefined ||
+    !canShareCenterReadToken(descriptor)
       ? {}
       : { centerReadToken: hostDescriptor.centerReadToken }),
     route: hostDescriptor.route ?? dashboardRoute(descriptor.workspaceId),
@@ -262,16 +273,59 @@ export function dashboardRoute(workspaceId: string): ShellHostContentRoute {
   return { view: "dashboard", workspaceId };
 }
 
+export function canShareCenterReadToken(
+  descriptor: CurrentContentDescriptor,
+): boolean {
+  if (descriptor.uri === undefined) {
+    return true;
+  }
+  try {
+    const uri = new URL(descriptor.uri);
+    if (uri.protocol === "lanedeck:") {
+      return uri.hostname === "content" || uri.hostname === "localhost";
+    }
+    return (
+      (uri.protocol === "http:" || uri.protocol === "https:") &&
+      uri.hostname === "lanedeck.localhost"
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function waitForFrameLoad(
+  host: ContentFrameHost,
+  timeoutMs: number,
+  onCleanup: (cleanup: () => void) => void,
+): Promise<void> {
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let loadCleanup: (() => void) | undefined;
+  try {
+    await Promise.race([
+      frameLoadPromise(host, (cleanup) => {
+        loadCleanup = cleanup;
+        onCleanup(cleanup);
+      }),
+      new Promise<void>((_resolve, reject) => {
+        timeout = globalThis.setTimeout(() => {
+          reject(new Error("content iframe load timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+    }
+    loadCleanup?.();
+  }
+}
+
+function frameLoadPromise(
   host: ContentFrameHost,
   onCleanup: (cleanup: () => void) => void,
 ): Promise<void> {
-  if (host.waitForLoad !== undefined) {
-    await host.waitForLoad();
-    return;
-  }
   if (host.onLoad !== undefined) {
-    await new Promise<void>((resolve) => {
+    return new Promise<void>((resolve) => {
       let cleanup: () => void = () => undefined;
       cleanup =
         host.onLoad?.(() => {
@@ -281,6 +335,10 @@ async function waitForFrameLoad(
       onCleanup(cleanup);
     });
   }
+  if (host.waitForLoad !== undefined) {
+    return host.waitForLoad();
+  }
+  return Promise.resolve();
 }
 
 export function contentUriFor(descriptor: CurrentContentDescriptor): string {

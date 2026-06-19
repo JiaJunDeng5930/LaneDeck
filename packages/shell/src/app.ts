@@ -11,6 +11,7 @@ import type {
   CenterQueryClient,
 } from "./center";
 import {
+  canShareCenterReadToken,
   contentLoadFailure,
   dashboardRoute,
   type ContentLoader,
@@ -299,7 +300,9 @@ export function createShellApp(deps: ShellDeps): ShellApp {
   ): ContentHostState {
     const access = deps.center.getContentQueryAccess?.();
     const centerQueryUrl = descriptor.centerQueryUrl ?? access?.queryUrl;
-    const centerReadToken = descriptor.centerReadToken ?? access?.readToken;
+    const centerReadToken = canShareCenterReadToken(descriptor)
+      ? (descriptor.centerReadToken ?? access?.readToken)
+      : undefined;
     return {
       pickerEnabled: picker.isEnabled(),
       workspaceId: descriptor.workspaceId,

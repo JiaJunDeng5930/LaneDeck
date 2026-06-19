@@ -21,6 +21,7 @@ export {
 export type {
   ContentFrameHost,
   ContentHostState,
+  IframeContentLoaderOptions,
   ContentLoadFailure,
   ContentLoader,
   ContentSession,
@@ -28,6 +29,7 @@ export type {
   ShellToContentMessage,
 } from "./content";
 export {
+  canShareCenterReadToken,
   contentLoadFailure,
   contentUriFor,
   createIframeContentLoader,
