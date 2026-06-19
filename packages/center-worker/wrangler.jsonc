@@ -26,7 +26,7 @@
     {
       "binding": "LANEDECK_DB",
       "database_name": "lanedeck",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "5d3e97c4-131f-4162-8c8c-b0d95366648b",
     },
   ],
   "r2_buckets": [
