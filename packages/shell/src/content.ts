@@ -407,7 +407,7 @@ function postFrameMessage(
   }
 
   if (messageCarriesReadToken(message)) {
-    const tokenFreeMessage = stripReadToken(message);
+    const tokenFreeMessage = wildcardBootstrapMessage(message);
     for (const targetOrigin of uniqueOrigins(policy.tokenFreeTargetOrigins)) {
       if (!policy.strictTargetOrigins.includes(targetOrigin)) {
         contentWindow.postMessage(tokenFreeMessage, targetOrigin);
@@ -428,17 +428,16 @@ function messageCarriesReadToken(message: ShellToContentMessage): boolean {
   return message.payload.hostState.centerReadToken !== undefined;
 }
 
-function stripReadToken(message: ShellToContentMessage): ShellToContentMessage {
+function wildcardBootstrapMessage(
+  message: ShellToContentMessage,
+): ShellToContentMessage {
   if (!messageCarriesReadToken(message)) {
     return message;
   }
-  const hostState = { ...message.payload.hostState };
-  delete hostState.centerReadToken;
   return {
     ...message,
     payload: {
-      ...message.payload,
-      hostState,
+      hostState: bootstrapHostState(message.payload.hostState),
     },
   };
 }
