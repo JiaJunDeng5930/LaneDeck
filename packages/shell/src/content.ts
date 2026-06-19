@@ -55,6 +55,7 @@ export function createIframeContentLoader(
   host: ContentFrameHost,
 ): ContentLoader {
   let activeSession: LoadedContentSession | undefined;
+  let pendingSession: LoadedContentSession | undefined;
   let reloadCount = 0;
   let pendingLoadCleanup: (() => void) | undefined;
 
@@ -63,12 +64,13 @@ export function createIframeContentLoader(
       descriptor: CurrentContentDescriptor,
       hostState = defaultHostState(descriptor),
     ): Promise<ContentSession> {
+      let session: LoadedContentSession | undefined;
       try {
         pendingLoadCleanup?.();
         pendingLoadCleanup = undefined;
         reloadCount += 1;
         const uri = contentUriFor(descriptor);
-        const session: LoadedContentSession = {
+        session = {
           status: "ready",
           descriptor,
           revision: descriptor.revision,
@@ -87,15 +89,23 @@ export function createIframeContentLoader(
               pendingLoadCleanup = undefined;
               activeSession = undefined;
             }
+            if (pendingSession === this) {
+              pendingLoadCleanup?.();
+              pendingLoadCleanup = undefined;
+              pendingSession = undefined;
+            }
             await host.close();
           },
         };
-        activeSession = session;
+        pendingSession = session;
+        const createdSession = session;
         const sendInit = () => {
-          if (activeSession === session) {
-            session.postMessage({
+          if (activeSession === createdSession) {
+            createdSession.postMessage({
               type: "init",
-              payload: { hostState: session.hostState ?? hostState },
+              payload: {
+                hostState: createdSession.hostState ?? hostState,
+              },
             });
           }
         };
@@ -106,26 +116,30 @@ export function createIframeContentLoader(
         if (pendingLoadCleanup !== undefined) {
           pendingLoadCleanup = undefined;
         }
-        if (activeSession === session) {
+        if (pendingSession === session) {
+          activeSession = session;
+          pendingSession = undefined;
           sendInit();
         }
         return session;
       } catch (error) {
+        if (pendingSession === session) {
+          pendingSession = undefined;
+        }
         return contentLoadFailure(error, descriptor);
       }
     },
     setPickerMode(enabled: boolean): void {
-      if (activeSession === undefined) {
-        return;
+      if (activeSession !== undefined) {
+        const hostState = updateSessionPickerMode(activeSession, enabled);
+        activeSession.postMessage({
+          type: "host_state",
+          payload: { hostState },
+        });
       }
-      activeSession.hostState = {
-        ...activeSession.hostState,
-        pickerEnabled: enabled,
-      };
-      activeSession.postMessage({
-        type: "host_state",
-        payload: { hostState: activeSession.hostState },
-      });
+      if (pendingSession !== undefined && pendingSession !== activeSession) {
+        updateSessionPickerMode(pendingSession, enabled);
+      }
     },
     setHeight(height: number): void {
       activeSession?.setHeight(height);
@@ -134,9 +148,22 @@ export function createIframeContentLoader(
       pendingLoadCleanup?.();
       pendingLoadCleanup = undefined;
       activeSession = undefined;
+      pendingSession = undefined;
       await host.close();
     },
   };
+}
+
+function updateSessionPickerMode(
+  session: LoadedContentSession,
+  enabled: boolean,
+): ContentHostState {
+  const hostState = {
+    ...(session.hostState ?? defaultHostState(session.descriptor)),
+    pickerEnabled: enabled,
+  };
+  session.hostState = hostState;
+  return hostState;
 }
 
 export function createIframeHost(
