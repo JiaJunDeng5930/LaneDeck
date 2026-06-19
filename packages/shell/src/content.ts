@@ -72,6 +72,7 @@ export function createIframeContentLoader(
       hostState = defaultHostState(descriptor),
     ): Promise<ContentSession> {
       let session: LoadedContentSession | undefined;
+      const previousActiveSession = activeSession;
       try {
         pendingLoadCleanup?.();
         pendingLoadCleanup = undefined;
@@ -112,7 +113,7 @@ export function createIframeContentLoader(
         };
         pendingSession = session;
         const createdSession = session;
-        const sendInit = () => {
+        const sendBootstrapInit = () => {
           if (
             pendingSession === createdSession ||
             activeSession === createdSession
@@ -120,13 +121,15 @@ export function createIframeContentLoader(
             createdSession.postMessage({
               type: "init",
               payload: {
-                hostState: createdSession.hostState ?? hostState,
+                hostState: bootstrapHostState(
+                  createdSession.hostState ?? hostState,
+                ),
               },
             });
           }
         };
         host.setSource(uri);
-        pendingInitCleanup = startInitRetry(sendInit);
+        pendingInitCleanup = startInitRetry(sendBootstrapInit);
         await waitForFrameLoad(host, loadTimeoutMs, (cleanup) => {
           pendingLoadCleanup = cleanup;
         });
@@ -138,12 +141,13 @@ export function createIframeContentLoader(
         if (pendingSession === session) {
           activeSession = session;
           pendingSession = undefined;
-          sendInit();
+          sendHostState(session, hostState);
         }
         return session;
       } catch (error) {
         if (pendingSession === session) {
           pendingSession = undefined;
+          await restoreAbandonedFrame(host, previousActiveSession);
         }
         pendingLoadCleanup?.();
         pendingLoadCleanup = undefined;
@@ -177,6 +181,35 @@ export function createIframeContentLoader(
       await host.close();
     },
   };
+}
+
+function sendHostState(
+  session: LoadedContentSession,
+  fallbackHostState: ContentHostState,
+): void {
+  session.postMessage({
+    type: "host_state",
+    payload: { hostState: session.hostState ?? fallbackHostState },
+  });
+}
+
+function bootstrapHostState(hostState: ContentHostState): ContentHostState {
+  return { pickerEnabled: hostState.pickerEnabled };
+}
+
+async function restoreAbandonedFrame(
+  host: ContentFrameHost,
+  previousActiveSession: LoadedContentSession | undefined,
+): Promise<void> {
+  try {
+    if (previousActiveSession !== undefined) {
+      host.setSource(previousActiveSession.uri);
+      return;
+    }
+    await host.close();
+  } catch {
+    return;
+  }
 }
 
 function startInitRetry(sendInit: () => void): () => void {
