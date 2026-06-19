@@ -4,6 +4,7 @@ import {
   contentUriFor,
   createIframeContentLoader,
   type ContentFrameHost,
+  type ContentHostState,
   type ContentSession,
   type ShellToContentMessage,
 } from "../content";
@@ -68,6 +69,33 @@ describe("content iframe loading", () => {
         },
       },
     ]);
+  });
+
+  it("uses the latest session host state when init follows a picker update", async () => {
+    const host = new FakeFrameHost();
+    const loader = createIframeContentLoader(host);
+    const session = loader.loadCurrent(
+      {
+        workspaceId: "workspace.local",
+        revision: "rev-1",
+        path: "index.html",
+      },
+      hostState(false),
+    );
+    await Promise.resolve();
+
+    loader.setPickerMode(true);
+    host.completeLoad();
+
+    await expect(session).resolves.toMatchObject({
+      status: "ready",
+      revision: "rev-1",
+      reloadCount: 1,
+    });
+    expect(host.messages.at(-1)).toEqual({
+      type: "init",
+      payload: { hostState: hostState(true) },
+    });
   });
 
   it("forwards picker mode as host state and height changes to the active frame", async () => {
@@ -161,6 +189,21 @@ function descriptorWithHostState(): HostStateDescriptor {
     workspaceId: "workspace.local",
     revision: "rev-1",
     path: "index.html",
+    centerQueryUrl: "https://center.example.test/api/query",
+    centerReadToken: "read-token",
+    route: {
+      view: "dashboard",
+      workspaceId: "workspace.local",
+      laneId: "lane.build",
+    },
+  };
+}
+
+function hostState(pickerEnabled: boolean): ContentHostState {
+  return {
+    pickerEnabled,
+    workspaceId: "workspace.local",
+    contentRevision: "rev-1",
     centerQueryUrl: "https://center.example.test/api/query",
     centerReadToken: "read-token",
     route: {

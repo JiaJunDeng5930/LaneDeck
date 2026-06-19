@@ -409,6 +409,87 @@ describe("content package contract", () => {
     app.dispose();
   });
 
+  it("updates picker state for an identical full host state route", async () => {
+    const document = new TestDocument();
+    vi.stubGlobal("document", document as unknown as Document);
+    const route = {
+      view: "dashboard" as const,
+      workspaceId: "workspace.local",
+      laneId: "lane.same",
+      params: { severity: "warning" },
+    };
+    const query = new SequencedQuery([
+      {
+        rows: [
+          {
+            pickId: "packages/content/src/views.tsx#dashboard.same-route",
+            eventText: "same route render",
+          },
+        ],
+        diagnostics: [],
+      },
+      {
+        rows: [
+          {
+            pickId: "packages/content/src/views.tsx#dashboard.replaced-route",
+            eventText: "unexpected replacement render",
+          },
+        ],
+        diagnostics: [],
+      },
+    ]);
+    const shell = new FakeShell({
+      hostState: { pickerEnabled: false },
+    });
+    const app = createContentApp({
+      query,
+      shell,
+    });
+
+    await app.init();
+    await app.render(route);
+    const renderedHtml = document.root.innerHTML;
+    const target = new TestPickElement();
+    const registration = registerPickTarget({
+      pickId: "packages/content/src/views.tsx#dashboard.same-route-manual",
+      element: target as unknown as HTMLElement,
+    });
+    shell.updateHostState({
+      pickerEnabled: true,
+      workspaceId: "workspace.local",
+      contentRevision: "rev-1",
+      centerQueryUrl: "https://center.example.test/api/query",
+      centerReadToken: "shell-read-token",
+      route: {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+        laneId: "lane.same",
+        params: { severity: "warning" },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    target.dispatch("click");
+
+    expect(query.requests).toEqual([
+      {
+        workspaceId: "workspace.local",
+        query: "current_state",
+        params: { severity: "warning", laneId: "lane.same" },
+      },
+    ]);
+    expect(document.root.innerHTML).toBe(renderedHtml);
+    expect(shell.messages).toContainEqual({
+      type: "pick_result",
+      payload: {
+        pickId: "packages/content/src/views.tsx#dashboard.same-route-manual",
+      },
+    });
+
+    registration.unregister();
+    app.dispose();
+  });
+
   it("reports query failure through the shell protocol", async () => {
     const document = new TestDocument();
     vi.stubGlobal("document", document as unknown as Document);
@@ -467,6 +548,21 @@ class FakeQuery implements CenterQueryClient {
   async query(request: QueryRequest): Promise<QueryResponse> {
     this.requests.push(request);
     return this.response;
+  }
+}
+
+class SequencedQuery implements CenterQueryClient {
+  readonly requests: QueryRequest[] = [];
+
+  constructor(private readonly responses: QueryResponse[]) {}
+
+  async query(request: QueryRequest): Promise<QueryResponse> {
+    this.requests.push(request);
+    const response = this.responses.shift();
+    if (response === undefined) {
+      throw new Error("missing query response");
+    }
+    return response;
   }
 }
 
