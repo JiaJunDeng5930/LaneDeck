@@ -37,6 +37,7 @@ export interface BrowserLiveEvent {
   type: "content_changed";
   workspaceId: string;
   contentRevision: string;
+  mutationId?: string;
 }
 
 export interface BrowserLiveHandlers {
@@ -56,6 +57,7 @@ export interface BrowserLiveClient {
 export interface HttpCenterClientOptions {
   baseUrl: string;
   workspaceId: string;
+  readToken?: string;
   fetch?: typeof fetch;
   reportProtocolDiagnostic?: (
     record: ProtocolDiagnosticRecord,
@@ -64,6 +66,7 @@ export interface HttpCenterClientOptions {
 
 export interface HttpMutationClientOptions {
   baseUrl: string;
+  mutationToken?: string;
   fetch?: typeof fetch;
 }
 
@@ -98,11 +101,16 @@ export function createHttpCenterClient(
     options.reportProtocolDiagnostic ?? (async () => undefined);
 
   async function query(request: QueryRequest): Promise<QueryResponse> {
-    return postJson<QueryResponse>(fetcher, new URL("/api/query", baseUrl), {
-      workspaceId: request.workspaceId,
-      query: request.query,
-      params: request.params,
-    });
+    return postJson<QueryResponse>(
+      fetcher,
+      new URL("/api/query", baseUrl),
+      {
+        workspaceId: request.workspaceId,
+        query: request.query,
+        params: request.params,
+      },
+      options.readToken,
+    );
   }
 
   return {
@@ -139,6 +147,7 @@ export function createHttpMutationClient(
         fetcher,
         new URL("/api/ai/mutation", baseUrl),
         request,
+        options.mutationToken,
       );
       return assertMutationResult(result);
     },
@@ -223,10 +232,17 @@ export function createBrowserDiagnosticReporter(
   };
 }
 
-export function centerLiveUrl(baseUrl: string, workspaceId: string): string {
-  const url = new URL("/api/live/browser", normalizeBaseUrl(baseUrl));
+export function centerLiveUrl(
+  baseUrl: string,
+  workspaceId: string,
+  readToken?: string,
+): string {
+  const url = new URL("/ws/browser", normalizeBaseUrl(baseUrl));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("workspaceId", workspaceId);
+  if (readToken !== undefined && readToken.trim().length > 0) {
+    url.searchParams.set("readToken", readToken);
+  }
   return url.toString();
 }
 
@@ -234,8 +250,15 @@ function descriptorFromRow(
   workspaceId: string,
   row: JsonObject,
 ): CurrentContentDescriptor {
-  const revision = readString(row.contentRevision, "contentRevision");
-  const path = readOptionalString(row.path, "path") ?? "index.html";
+  const revision = readAliasedString(row, [
+    ["revision", "revision"],
+    ["contentRevision", "contentRevision"],
+  ]);
+  const path =
+    readAliasedOptionalString(row, [
+      ["contentPath", "contentPath"],
+      ["path", "path"],
+    ]) ?? "index.html";
   const uri = readOptionalString(row.uri, "uri");
   return { workspaceId, revision, path, ...(uri === undefined ? {} : { uri }) };
 }
@@ -244,10 +267,11 @@ async function postJson<T>(
   fetcher: typeof fetch,
   url: URL,
   body: unknown,
+  bearerToken?: string,
 ): Promise<T> {
   const response = await fetcher(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: jsonHeaders(bearerToken),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -259,15 +283,32 @@ async function postJson<T>(
   return (await response.json()) as T;
 }
 
+function jsonHeaders(bearerToken?: string): Headers {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (bearerToken !== undefined && bearerToken.trim().length > 0) {
+    headers.set("authorization", `Bearer ${bearerToken}`);
+  }
+  return headers;
+}
+
 function normalizeBaseUrl(baseUrl: string): URL {
   return new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
 }
 
-function readString(input: unknown, path: string): string {
-  if (typeof input === "string" && input.length > 0) {
-    return input;
+function readAliasedString(
+  row: JsonObject,
+  aliases: Array<[field: string, path: string]>,
+): string {
+  for (const [field, path] of aliases) {
+    const value = row[field];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+    if (value !== undefined) {
+      throw new CenterClientError(`center row has invalid ${path}`);
+    }
   }
-  throw new CenterClientError(`center row is missing ${path}`);
+  throw new CenterClientError(`center row is missing ${aliases[0]?.[1]}`);
 }
 
 function readOptionalString(input: unknown, path: string): string | undefined {
@@ -278,6 +319,23 @@ function readOptionalString(input: unknown, path: string): string | undefined {
     return input;
   }
   throw new CenterClientError(`center row has invalid ${path}`);
+}
+
+function readAliasedOptionalString(
+  row: JsonObject,
+  aliases: Array<[field: string, path: string]>,
+): string | undefined {
+  for (const [field, path] of aliases) {
+    const value = row[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+    throw new CenterClientError(`center row has invalid ${path}`);
+  }
+  return undefined;
 }
 
 async function decodeLiveMessage(data: unknown): Promise<unknown> {
@@ -321,11 +379,23 @@ function handleLiveMessage(
     ]);
     return;
   }
+  if (
+    message.mutationId !== undefined &&
+    typeof message.mutationId !== "string"
+  ) {
+    handlers.onDiagnostic?.([
+      { path: "mutationId", message: "expected string" },
+    ]);
+    return;
+  }
 
   handlers.onEvent({
     type: "content_changed",
     workspaceId: message.workspaceId,
     contentRevision: message.contentRevision,
+    ...(message.mutationId === undefined
+      ? {}
+      : { mutationId: message.mutationId }),
   });
 }
 

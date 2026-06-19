@@ -55,14 +55,19 @@ fn content_candidates(root: &Path, request_path: &str) -> Result<Vec<PathBuf>, S
     let rest = safe_relative_path(segments)?;
 
     Ok(vec![
-        root.join(workspace).join(revision).join(&rest),
+        root.join(&workspace).join(&revision).join(&rest),
         root.join(rest),
     ])
 }
 
-fn safe_segment(segment: Option<&str>) -> Result<&str, StatusCode> {
-    let segment = segment.ok_or(StatusCode::BAD_REQUEST)?;
-    if segment == "." || segment == ".." || segment.contains('\\') {
+fn safe_segment(segment: Option<&str>) -> Result<String, StatusCode> {
+    let segment = percent_decode_segment(segment.ok_or(StatusCode::BAD_REQUEST)?)?;
+    if segment.is_empty()
+        || segment == "."
+        || segment == ".."
+        || segment.contains('/')
+        || segment.contains('\\')
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(segment)
@@ -80,6 +85,38 @@ fn safe_relative_path<'a>(segments: impl Iterator<Item = &'a str>) -> Result<Pat
         Ok(path)
     } else {
         Ok(PathBuf::from("index.html"))
+    }
+}
+
+fn percent_decode_segment(segment: &str) -> Result<String, StatusCode> {
+    let bytes = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn hex_value(value: u8) -> Result<u8, StatusCode> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(StatusCode::BAD_REQUEST),
     }
 }
 
@@ -126,6 +163,14 @@ mod tests {
     #[test]
     fn rejects_parent_segments() {
         assert!(content_candidates(Path::new("/content-root"), "/w/r/../x").is_err());
+        assert!(content_candidates(Path::new("/content-root"), "/w/r/%2e%2e/x").is_err());
+    }
+
+    #[test]
+    fn rejects_decoded_separators_and_bad_percent_encoding() {
+        assert!(content_candidates(Path::new("/content-root"), "/w/r/assets%2Fapp.js").is_err());
+        assert!(content_candidates(Path::new("/content-root"), "/w/r/assets%5Capp.js").is_err());
+        assert!(content_candidates(Path::new("/content-root"), "/w/r/assets%zzapp.js").is_err());
     }
 
     #[test]

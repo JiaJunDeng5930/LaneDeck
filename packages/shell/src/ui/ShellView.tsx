@@ -16,6 +16,7 @@ const centerBaseUrl =
   import.meta.env.VITE_LANEDECK_CENTER_URL ?? "http://localhost:8787";
 const workspaceId =
   import.meta.env.VITE_LANEDECK_WORKSPACE_ID ?? "workspace.local";
+const readToken = import.meta.env.VITE_LANEDECK_READ_TOKEN ?? "";
 
 export function ShellView() {
   const appRef = useRef<ShellApp | undefined>(undefined);
@@ -32,10 +33,11 @@ export function ShellView() {
     const center = createHttpCenterClient({
       baseUrl: centerBaseUrl,
       workspaceId,
+      readToken,
       reportProtocolDiagnostic: createBrowserDiagnosticReporter(),
     });
     const live = createWebSocketLiveClient({
-      url: centerLiveUrl(centerBaseUrl, workspaceId),
+      url: centerLiveUrl(centerBaseUrl, workspaceId, readToken),
     });
     const contentLoader = createIframeContentLoader(createIframeHost(iframe));
     const app = createShellApp({

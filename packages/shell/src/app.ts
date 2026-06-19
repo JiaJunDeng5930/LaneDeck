@@ -58,10 +58,15 @@ export function createShellApp(deps: ShellDeps): ShellApp {
   let liveConnection: BrowserLiveConnection | undefined;
   let activeSession: LoadedContentSession | undefined;
   let loadTail: Promise<void> = Promise.resolve();
+  let lifecycleGeneration = 0;
   const liveConnectTimeoutMs = deps.liveConnectTimeoutMs ?? 2_000;
 
   function enqueueContentLoad(): Promise<ContentSession> {
-    const load = loadTail.then(performContentLoad, performContentLoad);
+    const generation = lifecycleGeneration;
+    const load = loadTail.then(
+      () => performContentLoad(generation),
+      () => performContentLoad(generation),
+    );
     loadTail = load.then(
       () => undefined,
       () => undefined,
@@ -69,15 +74,26 @@ export function createShellApp(deps: ShellDeps): ShellApp {
     return load;
   }
 
-  async function performContentLoad(): Promise<ContentSession> {
-    if (state === "Stopped") {
+  async function performContentLoad(
+    generation: number,
+  ): Promise<ContentSession> {
+    if (isStaleGeneration(generation)) {
       return contentLoadFailure(new Error("shell is stopped"));
     }
 
     state = "LoadingContent";
     try {
       const descriptor = await deps.center.getCurrentContent();
+      if (isStaleGeneration(generation)) {
+        return contentLoadFailure(new Error("shell is stopped"), descriptor);
+      }
       const session = await deps.contentLoader.loadCurrent(descriptor);
+      if (isStaleGeneration(generation)) {
+        if (session.status === "ready") {
+          await session.close();
+        }
+        return contentLoadFailure(new Error("shell is stopped"), descriptor);
+      }
       if (session.status === "ready") {
         activeSession = session;
         state = picker.isEnabled() ? "PickerArmed" : "ContentReady";
@@ -87,13 +103,11 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         deps.onContentSession?.(session);
         return session;
       }
-      activeSession = undefined;
       state = "ContentError";
       await safelyRecordDiagnostics("content", session.diagnostics);
       deps.onContentSession?.(session);
       return session;
     } catch (error) {
-      activeSession = undefined;
       state = "ContentError";
       const failure = contentLoadFailure(error);
       await safelyRecordDiagnostics("content", failure.diagnostics);
@@ -107,6 +121,13 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       return;
     }
     if (event.type === "content_changed") {
+      if (
+        activeSession !== undefined &&
+        (event.workspaceId !== activeSession.descriptor.workspaceId ||
+          event.contentRevision === activeSession.revision)
+      ) {
+        return;
+      }
       await enqueueContentLoad();
     }
   }
@@ -185,16 +206,24 @@ export function createShellApp(deps: ShellDeps): ShellApp {
             }
             state = "PickCopied";
             const result = await picker.copyPickId(parsed.payload.pickId);
-            finishPickerCopy(result);
+            await finishPickerCopy(result);
             return;
           }
           case "error_report":
             state = "ContentError";
+            await safelyRecordDiagnostics("shell-content", [
+              {
+                path: "payload.message",
+                message:
+                  parsed.payload.detail === undefined
+                    ? parsed.payload.message
+                    : `${parsed.payload.message}: ${parsed.payload.detail}`,
+              },
+            ]);
             return;
         }
       } catch (error) {
-        state = "ContentReady";
-        await recordDiagnostics(
+        await safelyRecordDiagnostics(
           "shell-content",
           diagnosticsFromProtocolError(error),
         );
@@ -206,6 +235,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         return;
       }
       state = "Stopped";
+      lifecycleGeneration += 1;
       await liveConnection?.close();
       await deps.contentLoader.close();
       activeSession = undefined;
@@ -248,10 +278,22 @@ export function createShellApp(deps: ShellDeps): ShellApp {
     ]);
   }
 
-  function finishPickerCopy(_result: PickCopyResult): void {
+  function isStaleGeneration(generation: number): boolean {
+    return state === "Stopped" || generation !== lifecycleGeneration;
+  }
+
+  async function finishPickerCopy(result: PickCopyResult): Promise<void> {
     picker.setEnabled(false);
     deps.contentLoader.setPickerMode(false);
     deps.onPickerModeChange?.(false);
+    if (result.status === "failed") {
+      await safelyRecordDiagnostics("shell-content", [
+        {
+          path: "picker.clipboard",
+          message: `clipboard write failed for ${result.pickId}: ${errorMessage(result.error)}`,
+        },
+      ]);
+    }
     state = "ContentReady";
   }
 }

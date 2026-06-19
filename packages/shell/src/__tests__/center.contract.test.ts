@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { Diagnostic } from "@lanedeck/protocol";
 import {
   centerLiveUrl,
   createBrowserDiagnosticReporter,
   createHttpCenterClient,
   createHttpMutationClient,
+  createWebSocketLiveClient,
+  type BrowserLiveEvent,
 } from "../center";
 
 describe("center clients", () => {
@@ -13,13 +16,14 @@ describe("center clients", () => {
     const client = createHttpCenterClient({
       baseUrl: "https://center.example",
       workspaceId: "workspace.local",
+      readToken: "read-token",
       fetch: async (_input, init) => {
         calls.push(init ?? {});
         return jsonResponse({
           rows: [
             {
-              contentRevision: "rev-1",
-              path: "dashboards/home.html",
+              revision: "rev-1",
+              contentPath: "dashboards/home.html",
             },
           ],
           diagnostics: [],
@@ -37,12 +41,62 @@ describe("center clients", () => {
       query: "current_content",
       params: {},
     });
+    expect(new Headers(calls[0]?.headers).get("authorization")).toBe(
+      "Bearer read-token",
+    );
+  });
+
+  it("decodes browser live events with stable mutation ids", async () => {
+    const events: BrowserLiveEvent[] = [];
+    const diagnostics: Diagnostic[] = [];
+    const client = createWebSocketLiveClient({
+      url: "wss://center.example/ws/browser?workspaceId=workspace.local",
+      WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const connection = client.connect({
+      onEvent: (event) => events.push(event),
+      onDiagnostic: (items) => diagnostics.push(...items),
+    });
+    const socket = FakeWebSocket.last();
+    socket.emit("open");
+    await connection;
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "content_changed",
+        workspaceId: "workspace.local",
+        contentRevision: "rev-2",
+        mutationId: "mutation-2",
+      }),
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "content_changed",
+        workspaceId: "workspace.local",
+        contentRevision: "rev-3",
+        mutationId: 3,
+      }),
+    });
+    await drainAsyncWork();
+
+    expect(events).toEqual([
+      {
+        type: "content_changed",
+        workspaceId: "workspace.local",
+        contentRevision: "rev-2",
+        mutationId: "mutation-2",
+      },
+    ]);
+    expect(diagnostics).toEqual([
+      { path: "mutationId", message: "expected string" },
+    ]);
   });
 
   it("posts AI mutation requests and validates mutation results", async () => {
     const calls: Array<{ input: string; init: RequestInit | undefined }> = [];
     const client = createHttpMutationClient({
       baseUrl: "https://center.example/root",
+      mutationToken: "ai-token",
       fetch: async (input, init) => {
         calls.push({ input: String(input), init });
         return jsonResponse({
@@ -69,11 +123,16 @@ describe("center clients", () => {
         text: "Updated",
       },
     });
+    expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe(
+      "Bearer ai-token",
+    );
   });
 
   it("builds browser WSS live URLs for workspaces", () => {
-    expect(centerLiveUrl("https://center.example", "workspace.local")).toBe(
-      "wss://center.example/api/live/browser?workspaceId=workspace.local",
+    expect(
+      centerLiveUrl("https://center.example", "workspace.local", "read-token"),
+    ).toBe(
+      "wss://center.example/ws/browser?workspaceId=workspace.local&readToken=read-token",
     );
   });
 
@@ -99,6 +158,11 @@ describe("center clients", () => {
     ]);
   });
 });
+
+async function drainAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -133,4 +197,47 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string): void {
     this.values.set(key, value);
   }
+}
+
+class FakeWebSocket {
+  static readonly instances: FakeWebSocket[] = [];
+  private readonly listeners = new Map<
+    string,
+    Array<(event: unknown) => void>
+  >();
+
+  constructor(readonly url: string) {
+    FakeWebSocket.instances.push(this);
+  }
+
+  static last(): FakeWebSocket {
+    const socket = FakeWebSocket.instances.at(-1);
+    if (socket === undefined) {
+      throw new Error("missing fake websocket");
+    }
+    return socket;
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+  ): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push((event: unknown) => {
+      if (typeof listener === "function") {
+        listener(event as Event);
+        return;
+      }
+      listener.handleEvent(event as Event);
+    });
+    this.listeners.set(type, listeners);
+  }
+
+  emit(type: string, event: unknown = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+
+  close(): void {}
 }
