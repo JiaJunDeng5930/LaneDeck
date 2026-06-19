@@ -225,6 +225,34 @@ describe("shell app contract", () => {
     expect(content.closeCount).toBe(1);
   });
 
+  it("stop preserves terminal state after delayed picker copies", async () => {
+    const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
+    const content = new FakeContentLoader();
+    const clipboard = new DeferredClipboard();
+    const app = createShellApp({
+      center,
+      live: new FakeLive(),
+      contentLoader: content,
+      clipboard,
+      now: fixedNow,
+    });
+
+    await app.start();
+    app.setPickerMode(true);
+    const copy = app.handleContentMessage({
+      type: "pick_result",
+      payload: { pickId: "content.home.title" },
+    });
+    await clipboard.waitForWrite();
+    await app.stop();
+    clipboard.resolve();
+    await copy;
+    app.setPickerMode(true);
+
+    expect(content.closeCount).toBe(1);
+    expect(content.pickerModes).toEqual([true]);
+  });
+
   it("forwards picker mode and copies pick_result ids", async () => {
     const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
     const content = new FakeContentLoader();
@@ -239,12 +267,13 @@ describe("shell app contract", () => {
 
     await app.start();
     app.setPickerMode(true);
+    await app.handleContentMessage({ type: "ready", payload: {} });
     await app.handleContentMessage({
       type: "pick_result",
       payload: { pickId: "content.home.title" },
     });
 
-    expect(content.pickerModes).toEqual([true, false]);
+    expect(content.pickerModes).toEqual([true, true, false]);
     expect(clipboard.writes).toEqual(["content.home.title"]);
   });
 
@@ -570,6 +599,24 @@ class FakeClipboard implements ClipboardWriter {
       throw new Error("clipboard unavailable");
     }
     this.writes.push(text);
+  }
+}
+
+class DeferredClipboard implements ClipboardWriter {
+  private readonly writeStarted = deferredPromise<void>();
+  private readonly writeFinished = deferredPromise<void>();
+
+  async writeText(_text: string): Promise<void> {
+    this.writeStarted.resolve();
+    await this.writeFinished.promise;
+  }
+
+  async waitForWrite(): Promise<void> {
+    await this.writeStarted.promise;
+  }
+
+  resolve(): void {
+    this.writeFinished.resolve();
   }
 }
 

@@ -194,6 +194,9 @@ export function createShellApp(deps: ShellDeps): ShellApp {
           case "ready":
             if (activeSession !== undefined) {
               state = picker.isEnabled() ? "PickerArmed" : "ContentReady";
+              if (picker.isEnabled()) {
+                deps.contentLoader.setPickerMode(true);
+              }
             }
             return;
           case "height_changed":
@@ -204,8 +207,12 @@ export function createShellApp(deps: ShellDeps): ShellApp {
             if (!picker.isEnabled()) {
               return;
             }
+            const generation = lifecycleGeneration;
             state = "PickCopied";
             const result = await picker.copyPickId(parsed.payload.pickId);
+            if (isStaleGeneration(generation)) {
+              return;
+            }
             await finishPickerCopy(result);
             return;
           }

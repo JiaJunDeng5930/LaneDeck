@@ -361,6 +361,13 @@ function handleLiveMessage(
     ]);
     return;
   }
+  if (
+    message.type === "ingest_committed" ||
+    message.type === "lane_settings_changed" ||
+    message.type === "workspace_alarm"
+  ) {
+    return;
+  }
   if (message.type !== "content_changed") {
     handlers.onDiagnostic?.([
       { path: "type", message: "expected content_changed" },

@@ -65,6 +65,39 @@ const validLaneConfig = {
 } satisfies LaneConfig;
 
 describe("center-worker contract", () => {
+  it("answers browser API preflight without coordinator fetch", async () => {
+    let fetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/api/query", {
+        method: "OPTIONS",
+        headers: {
+          "access-control-request-headers": "authorization,content-type",
+        },
+      }),
+      {
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
+            fetched = true;
+          },
+        ),
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("access-control-allow-methods")).toContain(
+      "POST",
+    );
+    expect(response.headers.get("access-control-allow-headers")).toBe(
+      "authorization,content-type",
+    );
+    expect(fetched).toBe(false);
+  });
+
   it("routes workspace requests through Durable Object namespace ids", async () => {
     const harness = createHarness();
     let fetchedId: string | undefined;
@@ -246,6 +279,7 @@ describe("center-worker contract", () => {
       error: "authentication_failed",
       diagnostics: [expect.objectContaining({ path: "authorization" })],
     });
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
     expect(harness.storage.writeCount).toBe(0);
   });
 

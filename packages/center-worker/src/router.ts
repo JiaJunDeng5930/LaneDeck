@@ -26,17 +26,64 @@ export async function handleRequest(
   request: Request,
   env: CenterWorkerEnv,
 ): Promise<Response> {
+  if (request.method === "OPTIONS" && isCorsRoute(request)) {
+    return corsPreflightResponse(request);
+  }
+
   try {
-    return await routeRequest(request, env);
+    return withCorsHeaders(request, await routeRequest(request, env));
   } catch (error) {
     if (error instanceof ProtocolError) {
-      return errorResponse(
-        new ApiError(400, "protocol_validation_failed", error.diagnostics),
+      return withCorsHeaders(
+        request,
+        errorResponse(
+          new ApiError(400, "protocol_validation_failed", error.diagnostics),
+        ),
       );
     }
 
-    return errorResponse(error);
+    return withCorsHeaders(request, errorResponse(error));
   }
+}
+
+function isCorsRoute(request: Request): boolean {
+  const { pathname } = new URL(request.url);
+  return pathname.startsWith("/api/") || pathname.startsWith("/content/");
+}
+
+function corsPreflightResponse(request: Request): Response {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(request),
+  });
+}
+
+function withCorsHeaders(request: Request, response: Response): Response {
+  if (!isCorsRoute(request)) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  for (const [key, value] of corsHeaders(request)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function corsHeaders(request: Request): Headers {
+  const requestedHeaders =
+    request.headers.get("access-control-request-headers") ??
+    "authorization, content-type";
+  return new Headers({
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": requestedHeaders,
+    "access-control-max-age": "600",
+    vary: "Origin, Access-Control-Request-Headers",
+  });
 }
 
 async function routeRequest(

@@ -77,6 +77,14 @@ describe("center clients", () => {
         mutationId: 3,
       }),
     });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "ingest_committed",
+        workspaceId: "workspace.local",
+        batchId: "batch-1",
+        acceptedFrameCount: 1,
+      }),
+    });
     await drainAsyncWork();
 
     expect(events).toEqual([
