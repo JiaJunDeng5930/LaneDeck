@@ -1368,6 +1368,66 @@ describe("center-worker contract", () => {
     expect(browser.decodedMessages()).toEqual(firstMessages);
   });
 
+  it("overlapping build completions claim a build request before side effects", async () => {
+    const objects = new BlockingContentObjectStore();
+    const harness = createHarness(new MemoryCenterStorage(), objects);
+    const browser = new RecordingSocket();
+    harness.live.addBrowser(browser);
+
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "patch_content",
+      payload: {
+        path: "index.html",
+        source: "<main>live</main>",
+      },
+    });
+    await harness.workspace.mutate({
+      workspaceId: "workspace.local",
+      mutation: "request_local_build",
+      payload: {
+        machineId: "machine.local",
+        contentId: "content.home",
+        contentRevision: "id-2",
+        cwd: "/workspace/content",
+        command: "corepack pnpm --filter @lanedeck/content build",
+      },
+    });
+    const payload = {
+      workspaceId: "workspace.local",
+      machineId: "machine.local",
+      buildRequestId: "id-4",
+      contentId: "content.home",
+      contentRevision: "id-2",
+      entrypoint: "index.html",
+      artifacts: [
+        { path: "index.html", bodyBase64: "PG1haW4+YnVpbHQ8L21haW4+" },
+      ],
+    };
+
+    const first = harness.workspace.buildComplete(payload);
+    await objects.waitForArtifactWrite();
+    await expect(
+      harness.workspace.buildComplete(payload),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "content_build_in_progress",
+      diagnostics: [expect.objectContaining({ path: "buildRequestId" })],
+    });
+
+    expect(objects.buildArtifactWriteCount).toBe(0);
+    expect(browser.decodedMessages()).toEqual([]);
+
+    objects.releaseArtifactWrite();
+    await expect(first).resolves.toMatchObject({
+      mutation: "patch_content",
+      contentRevision: "id-2",
+      diagnostics: [],
+    });
+    expect(objects.buildArtifactWriteCount).toBe(1);
+    expect(browser.decodedMessages()).toHaveLength(1);
+  });
+
   it("agent WSS receives build command when mutation requires local build", async () => {
     const harness = createHarness();
     const agent = new RecordingSocket();
@@ -1696,8 +1756,10 @@ describe("center-worker contract", () => {
   });
 });
 
-function createHarness(storage = new MemoryCenterStorage()) {
-  const objects = new MemoryContentObjectStore();
+function createHarness(
+  storage = new MemoryCenterStorage(),
+  objects = new MemoryContentObjectStore(),
+) {
   const live = new LiveHub();
   let nextId = 0;
   const workspace = new WorkspaceService({
@@ -1858,6 +1920,39 @@ class MemoryContentObjectStore implements ContentObjectStore {
   }
 }
 
+class BlockingContentObjectStore extends MemoryContentObjectStore {
+  private readonly artifactWriteStarted: Promise<void>;
+  private readonly artifactWriteReleased: Promise<void>;
+  private markArtifactWriteStarted!: () => void;
+  private markArtifactWriteReleased!: () => void;
+
+  constructor() {
+    super();
+    this.artifactWriteStarted = new Promise((resolve) => {
+      this.markArtifactWriteStarted = resolve;
+    });
+    this.artifactWriteReleased = new Promise((resolve) => {
+      this.markArtifactWriteReleased = resolve;
+    });
+  }
+
+  async waitForArtifactWrite(): Promise<void> {
+    await this.artifactWriteStarted;
+  }
+
+  releaseArtifactWrite(): void {
+    this.markArtifactWriteReleased();
+  }
+
+  override async writeContentBuildArtifacts(
+    write: ContentBuildArtifactWrite,
+  ): Promise<ContentBuildObjectKeys> {
+    this.markArtifactWriteStarted();
+    await this.artifactWriteReleased;
+    return await super.writeContentBuildArtifacts(write);
+  }
+}
+
 class MemoryCenterStorage implements CenterStorage {
   readonly batches: IngestBatch[] = [];
   readonly frames: IngestBatch["frames"] = [];
@@ -1953,8 +2048,10 @@ class MemoryCenterStorage implements CenterStorage {
           candidate.buildRequestId === promotion.buildRequestId,
       );
       if (buildRequest !== undefined) {
-        buildRequest.status = "completed";
-        buildRequest.completedAt = promotion.promotedAt;
+        if (buildRequest.status === "claimed") {
+          buildRequest.status = "completed";
+          buildRequest.completedAt = promotion.promotedAt;
+        }
       }
     }
     this.currentContentRevision = record.revision;
@@ -1994,6 +2091,36 @@ class MemoryCenterStorage implements CenterStorage {
           record.buildRequestId === buildRequestId,
       ) ?? null
     );
+  }
+
+  async claimContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<boolean> {
+    const record = this.contentBuildRequests.find(
+      (candidate) =>
+        candidate.workspaceId === workspaceId &&
+        candidate.buildRequestId === buildRequestId,
+    );
+    if (record?.status !== "pending") {
+      return false;
+    }
+    record.status = "claimed";
+    return true;
+  }
+
+  async releaseContentBuildRequestClaim(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<void> {
+    const record = this.contentBuildRequests.find(
+      (candidate) =>
+        candidate.workspaceId === workspaceId &&
+        candidate.buildRequestId === buildRequestId,
+    );
+    if (record?.status === "claimed") {
+      record.status = "pending";
+    }
   }
 
   async saveLaneRevision(record: LaneRevisionRecord): Promise<boolean> {

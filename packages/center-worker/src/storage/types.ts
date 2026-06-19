@@ -38,7 +38,7 @@ export interface ContentBuildRequestRecord {
   cwd: string;
   command: string;
   createdAt: string;
-  status: "pending" | "completed";
+  status: "pending" | "claimed" | "completed";
   completedAt: string | null;
 }
 
@@ -106,6 +106,14 @@ export interface CenterStorage {
     workspaceId: string,
     buildRequestId: string,
   ): Promise<ContentBuildRequestRecord | null>;
+  claimContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<boolean>;
+  releaseContentBuildRequestClaim(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<void>;
   saveLaneRevision(record: LaneRevisionRecord): Promise<boolean>;
   listCurrentLaneRevisions(workspaceId: string): Promise<LaneRevisionRecord[]>;
   saveMutation(request: MutationRequest, mutationId: string): Promise<number>;

@@ -171,38 +171,72 @@ export class WorkspaceService {
       "contentRevision",
       "invalid_content_build_completion",
     );
-
-    const objectKeys =
-      await this.options.contentStore.writeContentBuildArtifacts({
-        revision: request.contentRevision,
-        entrypoint: request.entrypoint,
-        artifacts: request.artifacts,
-      });
-    const { record, isCurrent } =
-      await this.options.storage.promoteContentRevision({
-        workspaceId: request.workspaceId,
-        revision: request.contentRevision,
-        contentPath: request.entrypoint,
-        assetKey: objectKeys.entrypointKey,
-        promotedAt: this.clock(),
-        buildRequestId: request.buildRequestId,
-      });
-
-    if (isCurrent) {
-      this.options.live.broadcastToBrowsers({
-        type: "content_changed",
-        workspaceId: request.workspaceId,
-        mutationId: record.mutationId,
-        contentRevision: record.revision,
-      });
+    const claimed = await this.options.storage.claimContentBuildRequest(
+      request.workspaceId,
+      request.buildRequestId,
+    );
+    if (!claimed) {
+      return await this.inProgressOrDuplicateBuildCompletion(request);
     }
 
-    return {
-      mutation: "patch_content",
-      mutationId: record.mutationId,
-      contentRevision: record.revision,
-      diagnostics: supersededDiagnostics(isCurrent, "currentContent"),
-    };
+    try {
+      const objectKeys =
+        await this.options.contentStore.writeContentBuildArtifacts({
+          revision: request.contentRevision,
+          entrypoint: request.entrypoint,
+          artifacts: request.artifacts,
+        });
+      const { record, isCurrent } =
+        await this.options.storage.promoteContentRevision({
+          workspaceId: request.workspaceId,
+          revision: request.contentRevision,
+          contentPath: request.entrypoint,
+          assetKey: objectKeys.entrypointKey,
+          promotedAt: this.clock(),
+          buildRequestId: request.buildRequestId,
+        });
+
+      if (isCurrent) {
+        this.options.live.broadcastToBrowsers({
+          type: "content_changed",
+          workspaceId: request.workspaceId,
+          mutationId: record.mutationId,
+          contentRevision: record.revision,
+        });
+      }
+
+      return {
+        mutation: "patch_content",
+        mutationId: record.mutationId,
+        contentRevision: record.revision,
+        diagnostics: supersededDiagnostics(isCurrent, "currentContent"),
+      };
+    } catch (error) {
+      await this.options.storage.releaseContentBuildRequestClaim(
+        request.workspaceId,
+        request.buildRequestId,
+      );
+      throw error;
+    }
+  }
+
+  private async inProgressOrDuplicateBuildCompletion(
+    request: ContentBuildCompleteRequest,
+  ): Promise<MutationResult> {
+    const latest = await this.options.storage.getContentBuildRequest(
+      request.workspaceId,
+      request.buildRequestId,
+    );
+    if (latest?.status === "completed") {
+      return await this.duplicateBuildCompletion(request);
+    }
+
+    throw new ApiError(409, "content_build_in_progress", [
+      {
+        path: "buildRequestId",
+        message: "content build request is already being completed",
+      },
+    ]);
   }
 
   async alarm(workspaceId: string): Promise<void> {
@@ -247,7 +281,6 @@ export class WorkspaceService {
       sourcePath: payload.sourcePath,
       source: payload.source,
     });
-
     await this.options.storage.saveContentSourceRevision({
       workspaceId: request.workspaceId,
       mutationId,
@@ -260,7 +293,6 @@ export class WorkspaceService {
       createdAt,
       metadata: payload.metadata,
     });
-
     return {
       mutation: "patch_content",
       mutationId,
@@ -503,7 +535,7 @@ function validateBuildCompletionIdentity(
     machineId: string;
     contentId: string;
     contentRevision: string;
-    status: "pending" | "completed";
+    status: "pending" | "claimed" | "completed";
   } | null,
 ): void {
   if (buildRequest === null) {

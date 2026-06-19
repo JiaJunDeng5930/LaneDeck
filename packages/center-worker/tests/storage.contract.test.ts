@@ -5,6 +5,7 @@ import { R2ContentStore, rewriteViteAssetReferences } from "../src/storage/r2";
 
 import type { IngestBatch } from "@lanedeck/protocol";
 import type {
+  ContentBuildRequestRecord,
   ContentRevisionRecord,
   LaneRevisionRecord,
 } from "../src/storage/types";
@@ -104,6 +105,50 @@ describe("center-worker storage contract", () => {
         revision: "lane-z-revision",
       }),
     ]);
+  });
+
+  it("claims content build requests before completion side effects", async () => {
+    const db = new FakeD1Database();
+    const storage = new D1CenterStorage(db as unknown as D1Database);
+
+    await storage.saveContentSourceRevision(
+      contentRevision("revision-1", 1, "2026-06-10T10:00:01.000Z"),
+    );
+    await storage.saveContentBuildRequest(contentBuildRequest("build-1"));
+
+    await expect(
+      storage.claimContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toBe(true);
+    await expect(
+      storage.claimContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toBe(false);
+    await expect(
+      storage.getContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toMatchObject({ status: "claimed" });
+
+    await storage.releaseContentBuildRequestClaim("workspace.local", "build-1");
+    await expect(
+      storage.getContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toMatchObject({ status: "pending" });
+
+    await storage.claimContentBuildRequest("workspace.local", "build-1");
+    await storage.promoteContentRevision({
+      workspaceId: "workspace.local",
+      revision: "revision-1",
+      contentPath: "index.html",
+      assetKey: "content/revision-1/index.html",
+      promotedAt: "2026-06-10T10:00:02.000Z",
+      buildRequestId: "build-1",
+    });
+    await expect(
+      storage.getContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toMatchObject({
+      status: "completed",
+      completedAt: "2026-06-10T10:00:02.000Z",
+    });
+    await expect(
+      storage.claimContentBuildRequest("workspace.local", "build-1"),
+    ).resolves.toBe(false);
   });
 
   it("replaces repeated ingest batch scope atomically", async () => {
@@ -484,6 +529,24 @@ function laneRevision(
   } as LaneRevisionRecord;
 }
 
+function contentBuildRequest(
+  buildRequestId: string,
+): ContentBuildRequestRecord {
+  return {
+    workspaceId: "workspace.local",
+    buildRequestId,
+    mutationId: "mutation-build",
+    machineId: "machine.local",
+    contentId: "content.home",
+    contentRevision: "revision-1",
+    cwd: "/workspace/content",
+    command: "corepack pnpm --filter @lanedeck/content build",
+    createdAt: "2026-06-10T10:00:00.000Z",
+    status: "pending",
+    completedAt: null,
+  };
+}
+
 function ingestBatch(frames: IngestBatch["frames"]): IngestBatch {
   return {
     workspaceId: "workspace.local",
@@ -542,6 +605,20 @@ interface LaneRevisionRow {
   created_at: string;
 }
 
+interface ContentBuildRequestRow {
+  workspace_id: string;
+  build_request_id: string;
+  mutation_id: string;
+  machine_id: string;
+  content_id: string;
+  content_revision: string;
+  cwd: string;
+  command: string;
+  created_at: string;
+  status: string;
+  completed_at: string | null;
+}
+
 interface FrameRow {
   workspace_id: string;
   machine_id: string;
@@ -561,6 +638,7 @@ class FakeD1Database {
   readonly executedSql: string[] = [];
   readonly contentRevisions = new Map<string, ContentRevisionRow>();
   readonly laneRevisions = new Map<string, LaneRevisionRow>();
+  readonly contentBuildRequests = new Map<string, ContentBuildRequestRow>();
   private readonly frames = new Map<string, FrameRow>();
   private readonly frameRecords = new Set<string>();
   private readonly pointers = new Map<string, PointerRow>();
@@ -595,6 +673,7 @@ class FakeD1Database {
 
   run(sql: string, bindings: unknown[]): D1Result {
     this.executedSql.push(sql);
+    let changes = 0;
 
     if (sql.includes("DELETE FROM frame_records")) {
       this.deleteBatchFrameRecords(bindings as string[]);
@@ -694,6 +773,61 @@ class FakeD1Database {
       if (row !== undefined) {
         row.content_path = contentPath;
         row.asset_key = assetKey;
+        changes = 1;
+      }
+    }
+
+    if (sql.includes("INSERT INTO content_build_requests")) {
+      const [
+        workspaceId,
+        buildRequestId,
+        mutationId,
+        machineId,
+        contentId,
+        contentRevision,
+        cwd,
+        command,
+        createdAt,
+        status,
+        completedAt,
+      ] = bindings as (string | null)[];
+      this.contentBuildRequests.set(
+        buildRequestKey(String(workspaceId), String(buildRequestId)),
+        {
+          workspace_id: String(workspaceId),
+          build_request_id: String(buildRequestId),
+          mutation_id: String(mutationId),
+          machine_id: String(machineId),
+          content_id: String(contentId),
+          content_revision: String(contentRevision),
+          cwd: String(cwd),
+          command: String(command),
+          created_at: String(createdAt),
+          status: String(status),
+          completed_at: completedAt === null ? null : String(completedAt),
+        },
+      );
+      changes = 1;
+    }
+
+    if (sql.includes("UPDATE content_build_requests")) {
+      const [status, second, third, fourth, fifth] = bindings as (
+        | string
+        | null
+      )[];
+      const hasCompletedAt = sql.includes("completed_at");
+      const workspaceId = String(hasCompletedAt ? third : second);
+      const buildRequestId = String(hasCompletedAt ? fourth : third);
+      const expectedStatus = String(hasCompletedAt ? fifth : fourth);
+      const row = this.contentBuildRequests.get(
+        buildRequestKey(workspaceId, buildRequestId),
+      );
+      if (row?.status === expectedStatus) {
+        row.status = String(status);
+        if (hasCompletedAt) {
+          row.completed_at = second === null ? null : String(second);
+        }
+        changes = 1;
       }
     }
 
@@ -722,7 +856,7 @@ class FakeD1Database {
       this.upsertPointer(sql, bindings);
     }
 
-    return { success: true, meta: {} } as D1Result;
+    return { success: true, meta: { changes } } as unknown as D1Result;
   }
 
   first<T>(sql: string, bindings: unknown[], column?: string): T | null {
@@ -747,6 +881,13 @@ class FakeD1Database {
       const [workspaceId, revision] = bindings as string[];
       return (this.contentRevisions.get(contentKey(workspaceId, revision)) ??
         null) as T | null;
+    }
+
+    if (sql.includes("FROM content_build_requests")) {
+      const [workspaceId, buildRequestId] = bindings as string[];
+      return (this.contentBuildRequests.get(
+        buildRequestKey(workspaceId, buildRequestId),
+      ) ?? null) as T | null;
     }
 
     return null;
@@ -931,6 +1072,10 @@ function laneKey(
   revision: string,
 ): string {
   return `${workspaceId}:${laneId}:${revision}`;
+}
+
+function buildRequestKey(workspaceId: string, buildRequestId: string): string {
+  return `${workspaceId}:${buildRequestId}`;
 }
 
 function frameKey(

@@ -242,13 +242,14 @@ export class D1CenterStorage implements CenterStorage {
           .prepare(
             `UPDATE content_build_requests
             SET status = ?, completed_at = ?
-            WHERE workspace_id = ? AND build_request_id = ?`,
+            WHERE workspace_id = ? AND build_request_id = ? AND status = ?`,
           )
           .bind(
             "completed",
             promotion.promotedAt,
             promotion.workspaceId,
             promotion.buildRequestId,
+            "claimed",
           ),
       );
     }
@@ -340,6 +341,36 @@ export class D1CenterStorage implements CenterStorage {
       .first<ContentBuildRequestRow>();
 
     return row === null ? null : contentBuildRequestFromRow(row);
+  }
+
+  async claimContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE content_build_requests
+        SET status = ?
+        WHERE workspace_id = ? AND build_request_id = ? AND status = ?`,
+      )
+      .bind("claimed", workspaceId, buildRequestId, "pending")
+      .run();
+
+    return changedRows(result) === 1;
+  }
+
+  async releaseContentBuildRequestClaim(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE content_build_requests
+        SET status = ?
+        WHERE workspace_id = ? AND build_request_id = ? AND status = ?`,
+      )
+      .bind("pending", workspaceId, buildRequestId, "claimed")
+      .run();
   }
 
   async getContentRevision(
@@ -624,6 +655,9 @@ function laneRevisionFromRow(row: LaneRevisionRow): LaneRevisionRecord {
 function contentBuildRequestFromRow(
   row: ContentBuildRequestRow,
 ): ContentBuildRequestRecord {
+  const status = ["pending", "claimed", "completed"].includes(row.status)
+    ? row.status
+    : "pending";
   return {
     workspaceId: row.workspace_id,
     buildRequestId: row.build_request_id,
@@ -634,9 +668,13 @@ function contentBuildRequestFromRow(
     cwd: row.cwd,
     command: row.command,
     createdAt: row.created_at,
-    status: row.status === "completed" ? "completed" : "pending",
+    status: status as ContentBuildRequestRecord["status"],
     completedAt: row.completed_at,
   };
+}
+
+function changedRows(result: D1Result): number {
+  return (result.meta as { changes?: number }).changes ?? 0;
 }
 
 export function contentRevisionToJson(
