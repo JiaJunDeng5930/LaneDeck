@@ -14,7 +14,7 @@ import {
 } from "../index";
 
 const centerBaseUrl =
-  import.meta.env.VITE_LANEDECK_CENTER_URL ?? "http://localhost:8787";
+  import.meta.env.VITE_LANEDECK_CENTER_URL ?? defaultCenterBaseUrl();
 const workspaceId =
   import.meta.env.VITE_LANEDECK_WORKSPACE_ID ?? "workspace.local";
 const readToken = import.meta.env.VITE_LANEDECK_READ_TOKEN ?? "";
@@ -24,6 +24,12 @@ export interface ShellViewReadiness {
   contentReady: boolean;
   liveReady: boolean;
   startupSettled: boolean;
+}
+
+export function defaultCenterBaseUrl(
+  location: Pick<Location, "origin"> | undefined = globalThis.location,
+): string {
+  return location?.origin ?? "http://localhost:8787";
 }
 
 export function shellVisibleStatusForReadiness(

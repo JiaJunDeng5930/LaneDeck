@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultCenterBaseUrl,
   isAllowedContentOrigin,
   shellVisibleStatusForReadiness,
 } from "../ui/ShellView";
@@ -43,6 +44,15 @@ describe("ShellView content message origin filtering", () => {
 });
 
 describe("ShellView visible readiness", () => {
+  it("uses the current browser origin as the default center URL", () => {
+    expect(
+      defaultCenterBaseUrl({
+        origin: "https://lanedeck-center.example.workers.dev",
+      }),
+    ).toBe("https://lanedeck-center.example.workers.dev");
+    expect(defaultCenterBaseUrl(undefined)).toBe("http://localhost:8787");
+  });
+
   it("shows Ready only after startup, content, and live connection are ready", () => {
     expect(
       shellVisibleStatusForReadiness({

@@ -23,10 +23,10 @@ The center Worker is deployed with:
 export LANEDECK_AGENT_TOKEN=...
 export LANEDECK_AI_MUTATION_TOKEN=...
 export LANEDECK_READ_TOKEN=...
+export LANEDECK_CENTER_URL=https://lanedeck-center.<subdomain>.workers.dev
 
 corepack pnpm run preflight:center
 corepack pnpm run deploy:center
-export LANEDECK_CENTER_URL=https://lanedeck-center.<subdomain>.workers.dev
 corepack pnpm run verify:center
 ```
 

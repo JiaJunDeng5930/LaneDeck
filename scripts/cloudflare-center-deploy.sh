@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER_DIR="$ROOT_DIR/packages/center-worker"
 EXPECTED_D1_DATABASE_ID="5d3e97c4-131f-4162-8c8c-b0d95366648b"
 REQUIRED_ENV=(
+  LANEDECK_CENTER_URL
   LANEDECK_AGENT_TOKEN
   LANEDECK_AI_MUTATION_TOKEN
   LANEDECK_READ_TOKEN
@@ -83,6 +84,13 @@ classify_r2_failure() {
 require_command corepack
 require_command jq
 require_env
+
+export VITE_LANEDECK_CENTER_URL="$LANEDECK_CENTER_URL"
+export VITE_LANEDECK_CONTENT_BASE_URL="${LANEDECK_CONTENT_BASE_URL:-$LANEDECK_CENTER_URL/content/}"
+export VITE_LANEDECK_WORKSPACE_ID="${LANEDECK_WORKSPACE_ID:-workspace.local}"
+export VITE_LANEDECK_READ_TOKEN="$LANEDECK_READ_TOKEN"
+
+corepack pnpm --filter @lanedeck/shell build
 
 cd "$WORKER_DIR"
 

@@ -8,6 +8,12 @@
     "enabled": true,
     "head_sampling_rate": 1,
   },
+  "assets": {
+    "directory": "../shell/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application",
+  },
   "secrets": {
     "required": [
       "LANEDECK_AGENT_TOKEN",

@@ -171,9 +171,7 @@ async function routeRequest(
   }
 
   if (request.method === "GET") {
-    return new Response("<!doctype html><title>LaneDeck</title>", {
-      headers: { "content-type": "text/html; charset=utf-8" },
-    });
+    return await readShellAsset(request, env);
   }
 
   return errorResponse(
@@ -181,6 +179,21 @@ async function routeRequest(
       { path: "method", message: "expected supported LaneDeck route method" },
     ]),
   );
+}
+
+async function readShellAsset(
+  request: Request,
+  env: CenterWorkerEnv,
+): Promise<Response> {
+  if (env.ASSETS === undefined) {
+    return errorResponse(
+      new ApiError(500, "shell_assets_not_configured", [
+        { path: "ASSETS", message: "expected Worker static assets binding" },
+      ]),
+    );
+  }
+
+  return await env.ASSETS.fetch(request);
 }
 
 async function readContentAsset(

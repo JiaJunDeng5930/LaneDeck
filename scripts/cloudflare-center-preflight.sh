@@ -55,6 +55,8 @@ classify_r2_failure() {
 require_command corepack
 require_command jq
 
+corepack pnpm --filter @lanedeck/shell build
+
 cd "$WORKER_DIR"
 
 run_wrangler --version

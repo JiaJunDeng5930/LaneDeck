@@ -25,6 +25,7 @@ import type {
   MutationRequest,
 } from "@lanedeck/protocol";
 import type {
+  CenterWorkerEnv,
   WorkspaceCoordinatorNamespace,
   WorkspaceCoordinatorRpc,
 } from "../src/runtime-types";
@@ -65,6 +66,76 @@ const validLaneConfig = {
 } satisfies LaneConfig;
 
 describe("center-worker contract", () => {
+  it("serves shell assets for browser GET routes", async () => {
+    let coordinatorFetched = false;
+    let requestedUrl: string | undefined;
+    const response = await handleRequest(new Request("https://center.local/"), {
+      ...createHarness().env,
+      WORKSPACE_COORDINATOR: workspaceNamespace(
+        createHarness().coordinator,
+        () => {
+          coordinatorFetched = true;
+        },
+      ),
+      ASSETS: shellAssets((request) => {
+        requestedUrl = request.url;
+        return new Response(
+          '<!doctype html><div id="root">LaneDeck shell</div><script type="module" src="/assets/index.js"></script>',
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    await expect(response.text()).resolves.toContain("LaneDeck shell");
+    expect(requestedUrl).toBe("https://center.local/");
+    expect(coordinatorFetched).toBe(false);
+  });
+
+  it("reports a configuration error when shell assets binding is missing", async () => {
+    const envWithoutAssets: CenterWorkerEnv = {
+      ...createHarness().env,
+      ASSETS: undefined,
+    };
+    const response = await handleRequest(
+      new Request("https://center.local/"),
+      envWithoutAssets,
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "shell_assets_not_configured",
+      diagnostics: [expect.objectContaining({ path: "ASSETS" })],
+    });
+  });
+
+  it("routes API requests before shell assets", async () => {
+    const harness = createHarness();
+    let assetsFetched = false;
+    const response = await handleRequest(
+      jsonRequest(
+        "/api/query",
+        {
+          workspaceId: "workspace.local",
+          query: "current_state",
+          params: {},
+        },
+        "read-token",
+      ),
+      {
+        ...harness.env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(assetsFetched).toBe(false);
+  });
+
   it("answers browser API preflight without coordinator fetch", async () => {
     let fetched = false;
     const response = await handleRequest(
@@ -1965,6 +2036,7 @@ function createHarness(
     WORKSPACE_COORDINATOR: workspaceNamespace(coordinator),
     LANEDECK_DB: {},
     LANEDECK_BUCKET: {},
+    ASSETS: shellAssets(() => new Response("shell asset")),
     LANEDECK_AI_MUTATION_TOKEN: "ai-token",
     LANEDECK_AGENT_TOKEN: "agent-token",
     LANEDECK_READ_TOKEN: "read-token",
@@ -1985,6 +2057,12 @@ function workspaceNamespace(
       return coordinator as WorkspaceCoordinatorRpc;
     },
   };
+}
+
+function shellAssets(handler: (request: Request) => Response): Fetcher {
+  return {
+    fetch: async (request: Request) => handler(request),
+  } as Fetcher;
 }
 
 function jsonRequest(path: string, body: JsonObject, token?: string): Request {

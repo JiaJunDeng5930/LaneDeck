@@ -15,6 +15,8 @@ require_command() {
 
 require_command corepack
 
+corepack pnpm --filter @lanedeck/shell build
+
 bash -n \
   "$ROOT_DIR/scripts/cloudflare-center-ci.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-deploy.sh" \

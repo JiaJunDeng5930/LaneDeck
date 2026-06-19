@@ -44,6 +44,7 @@ export interface CenterWorkerEnv {
   WORKSPACE_COORDINATOR: WorkspaceCoordinatorNamespace;
   LANEDECK_DB: D1Database;
   LANEDECK_BUCKET: R2Bucket;
+  ASSETS?: Fetcher;
   LANEDECK_AGENT_TOKEN?: string;
   LANEDECK_AI_MUTATION_TOKEN?: string;
   LANEDECK_READ_TOKEN?: string;
