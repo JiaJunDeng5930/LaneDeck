@@ -58,6 +58,7 @@ export interface BrowserLiveHandlers {
   onEvent(event: BrowserLiveEvent): void;
   onDiagnostic?(diagnostics: Diagnostic[]): void;
   onError?(error: unknown): void;
+  onDisconnect?(): void;
 }
 
 export interface BrowserLiveConnection {
@@ -213,6 +214,14 @@ export function createWebSocketLiveClient(
       return new Promise((resolve, reject) => {
         const socket = new WebSocketImpl(options.url);
         let settled = false;
+        let disconnected = false;
+        const notifyDisconnect = () => {
+          if (disconnected) {
+            return;
+          }
+          disconnected = true;
+          handlers.onDisconnect?.();
+        };
 
         socket.addEventListener(
           "open",
@@ -241,10 +250,19 @@ export function createWebSocketLiveClient(
         socket.addEventListener("error", (event) => {
           if (settled) {
             handlers.onError?.(event);
+            notifyDisconnect();
             return;
           }
           settled = true;
           reject(new CenterClientError("live connection failed"));
+        });
+        socket.addEventListener("close", () => {
+          if (settled) {
+            notifyDisconnect();
+            return;
+          }
+          settled = true;
+          reject(new CenterClientError("live connection closed before open"));
         });
       });
     },

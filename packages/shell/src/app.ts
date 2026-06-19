@@ -63,6 +63,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
   let activeSession: LoadedContentSession | undefined;
   let loadTail: Promise<void> = Promise.resolve();
   let lifecycleGeneration = 0;
+  let liveConnected = false;
   const liveConnectTimeoutMs = deps.liveConnectTimeoutMs ?? 2_000;
 
   function enqueueContentLoad(): Promise<ContentSession> {
@@ -251,9 +252,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       state = "Stopped";
       lifecycleGeneration += 1;
       await liveConnection?.close();
-      if (liveConnection !== undefined) {
-        deps.onLiveConnectionChange?.(false);
-      }
+      setLiveConnected(false);
       await deps.contentLoader.close();
       activeSession = undefined;
       liveConnection = undefined;
@@ -274,18 +273,29 @@ export function createShellApp(deps: ShellDeps): ShellApp {
             { path: "$", message: errorMessage(error) },
           ]);
         },
+        onDisconnect() {
+          setLiveConnected(false);
+        },
       });
       if (state === "Stopped") {
         await connection.close();
         return;
       }
       liveConnection = connection;
-      deps.onLiveConnectionChange?.(true);
+      setLiveConnected(true);
     } catch (error) {
       await safelyRecordDiagnostics("live", [
         { path: "$", message: errorMessage(error) },
       ]);
     }
+  }
+
+  function setLiveConnected(connected: boolean): void {
+    if (liveConnected === connected) {
+      return;
+    }
+    liveConnected = connected;
+    deps.onLiveConnectionChange?.(connected);
   }
 
   async function waitForLiveStart(liveAttempt: Promise<void>): Promise<void> {

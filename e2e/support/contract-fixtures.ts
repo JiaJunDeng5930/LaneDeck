@@ -135,10 +135,9 @@ export function makeContentBuildCompleteRequest(
     artifacts: [
       {
         path: e2eContentPath,
-        bodyBase64: Buffer.from(
-          `<!doctype html><main>${e2ePatchedContentText}</main>`,
-          "utf8",
-        ).toString("base64"),
+        bodyBase64: Buffer.from(e2eDashboardArtifactHtml(), "utf8").toString(
+          "base64",
+        ),
         contentType: "text/html; charset=utf-8",
       },
     ],
@@ -189,4 +188,122 @@ function makeTimeTriggeredQuietSignalFrame(): Frame {
       quietSignal: true,
     },
   });
+}
+
+function e2eDashboardArtifactHtml(): string {
+  return `<!doctype html>
+<html>
+  <body>
+    <main id="root">${e2ePatchedContentText}</main>
+    <script>
+      (() => {
+        const patchedText = ${JSON.stringify(e2ePatchedContentText)};
+        const root = document.getElementById("root");
+        let hostState = {};
+
+        function post(message) {
+          window.parent.postMessage(message, "*");
+        }
+
+        function escapeHtml(value) {
+          return String(value).replace(/[&<>"']/g, (char) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[char]);
+        }
+
+        function mergeHostState(next) {
+          hostState = { ...hostState, ...next };
+        }
+
+        function routeFromHostState() {
+          if (hostState.route !== undefined) {
+            return hostState.route;
+          }
+          if (typeof hostState.workspaceId === "string") {
+            return { view: "dashboard", workspaceId: hostState.workspaceId };
+          }
+          return undefined;
+        }
+
+        function queryFor(route) {
+          return route.view === "custom" ? route.query : "current_state";
+        }
+
+        function paramsFor(route) {
+          if (route.view === "custom") {
+            return route.params ?? {};
+          }
+          return route.laneId === undefined ? {} : { laneId: route.laneId };
+        }
+
+        async function render() {
+          if (root === null) {
+            return;
+          }
+          const parts = [
+            '<section data-pick-id="${e2ePickId}">' +
+              escapeHtml(patchedText) +
+              "</section>",
+          ];
+          const route = routeFromHostState();
+          if (
+            typeof hostState.centerQueryUrl === "string" &&
+            typeof route?.workspaceId === "string"
+          ) {
+            try {
+              const headers = { "content-type": "application/json" };
+              if (typeof hostState.centerReadToken === "string") {
+                headers.authorization = "Bearer " + hostState.centerReadToken;
+              }
+              const response = await fetch(hostState.centerQueryUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  workspaceId: route.workspaceId,
+                  query: queryFor(route),
+                  params: paramsFor(route),
+                }),
+              });
+              const body = await response.json();
+              const frames = body?.rows?.[0]?.frames ?? [];
+              for (const frame of frames) {
+                parts.push(
+                  "<article>" +
+                    escapeHtml(JSON.stringify(frame.summary ?? frame)) +
+                    "</article>",
+                );
+              }
+            } catch (error) {
+              parts.push("<pre>" + escapeHtml(error?.message ?? error) + "</pre>");
+            }
+          }
+          root.innerHTML = parts.join("");
+        }
+
+        window.addEventListener("message", (event) => {
+          const message = event.data;
+          if (message === null || typeof message !== "object") {
+            return;
+          }
+          if (message.type === "init") {
+            mergeHostState(message.payload?.hostState ?? {});
+            if (message.payload?.route !== undefined) {
+              hostState.route = message.payload.route;
+            }
+            post({ type: "ready", payload: {} });
+            void render();
+          }
+          if (message.type === "host_state") {
+            mergeHostState(message.payload?.hostState ?? {});
+            void render();
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>`;
 }

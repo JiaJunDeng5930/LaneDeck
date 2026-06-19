@@ -127,6 +127,28 @@ describe("center clients", () => {
     ]);
   });
 
+  it("reports browser live disconnects after an opened socket closes or errors", async () => {
+    const disconnects: string[] = [];
+    const client = createWebSocketLiveClient({
+      url: "wss://center.example/ws/browser?workspaceId=workspace.local",
+      WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    const connection = client.connect({
+      onEvent: () => undefined,
+      onError: () => disconnects.push("error"),
+      onDisconnect: () => disconnects.push("disconnected"),
+    });
+    const socket = FakeWebSocket.last();
+    socket.emit("open");
+    await connection;
+
+    socket.emit("error");
+    socket.emit("close");
+
+    expect(disconnects).toEqual(["error", "disconnected"]);
+  });
+
   it("posts AI mutation requests and validates mutation results", async () => {
     const calls: Array<{ input: string; init: RequestInit | undefined }> = [];
     const client = createHttpMutationClient({
@@ -274,5 +296,7 @@ class FakeWebSocket {
     }
   }
 
-  close(): void {}
+  close(): void {
+    this.emit("close");
+  }
 }

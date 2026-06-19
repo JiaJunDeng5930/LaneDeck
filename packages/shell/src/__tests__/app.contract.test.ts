@@ -236,6 +236,28 @@ describe("shell app contract", () => {
     expect(liveChanges).toEqual([true, false]);
   });
 
+  it("clears live readiness when an active live connection disconnects", async () => {
+    const live = new FakeLive();
+    const liveChanges: boolean[] = [];
+    const app = createShellApp({
+      center: new FakeCenter([descriptor("workspace.local", "rev-1")]),
+      live,
+      contentLoader: new FakeContentLoader(),
+      clipboard: new FakeClipboard(),
+      now: fixedNow,
+      onLiveConnectionChange(connected) {
+        liveChanges.push(connected);
+      },
+    });
+
+    await app.start();
+    live.disconnect();
+    live.disconnect();
+    await drainAsyncWork();
+
+    expect(liveChanges).toEqual([true, false]);
+  });
+
   it("loadCurrentContent returns typed failures and records content diagnostics", async () => {
     const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
     const content = new FakeContentLoader([
@@ -675,6 +697,10 @@ class FakeLive implements BrowserLiveClient {
 
   emit(event: BrowserLiveEvent): void {
     this.handlers?.onEvent(event);
+  }
+
+  disconnect(): void {
+    this.handlers?.onDisconnect?.();
   }
 }
 
