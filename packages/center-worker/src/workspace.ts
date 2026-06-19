@@ -259,7 +259,10 @@ export class WorkspaceService {
     for (const lane of lanes) {
       delivered += this.options.live.sendToAgent(socket, {
         type: "reload_lane_config",
-        messageId: laneReloadControlMessageId(lane.revision),
+        messageId: laneReloadReplayControlMessageId(
+          lane.revision,
+          this.idGenerator(),
+        ),
         config: parseLaneConfig(lane.settings),
       });
     }
@@ -602,6 +605,13 @@ function supersededDiagnostics(isCurrent: boolean, path: string): Diagnostic[] {
 
 function laneReloadControlMessageId(laneRevision: string): string {
   return `reload_lane_config:${laneRevision}`;
+}
+
+function laneReloadReplayControlMessageId(
+  laneRevision: string,
+  replayId: string,
+): string {
+  return `reload_lane_config_replay:${laneRevision}:${replayId}`;
 }
 
 function jsonObjectFromLaneConfig(config: LaneConfig): JsonObject {

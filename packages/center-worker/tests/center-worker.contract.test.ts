@@ -1665,7 +1665,7 @@ describe("center-worker contract", () => {
     expect(harness.storage.laneRevisions).toHaveLength(1);
   });
 
-  it("agent connect replay sends current lane configs with revision-stable control ids", async () => {
+  it("agent connect replay sends current lane configs with fresh control ids", async () => {
     const harness = createHarness();
 
     await harness.workspace.mutate({
@@ -1674,14 +1674,26 @@ describe("center-worker contract", () => {
       payload: { config: validLaneConfig },
     });
 
-    const agent = new RecordingSocket();
+    const firstAgent = new RecordingSocket();
     await expect(
-      harness.workspace.replayCurrentLaneConfigs("workspace.local", agent),
+      harness.workspace.replayCurrentLaneConfigs("workspace.local", firstAgent),
+    ).resolves.toBe(1);
+    const secondAgent = new RecordingSocket();
+    await expect(
+      harness.workspace.replayCurrentLaneConfigs(
+        "workspace.local",
+        secondAgent,
+      ),
     ).resolves.toBe(1);
 
-    expect(agent.decodedMessages()).toContainEqual({
+    expect(firstAgent.decodedMessages()).toContainEqual({
       type: "reload_lane_config",
-      messageId: "reload_lane_config:id-2",
+      messageId: "reload_lane_config_replay:id-2:id-3",
+      config: validLaneConfig,
+    });
+    expect(secondAgent.decodedMessages()).toContainEqual({
+      type: "reload_lane_config",
+      messageId: "reload_lane_config_replay:id-2:id-4",
       config: validLaneConfig,
     });
   });
