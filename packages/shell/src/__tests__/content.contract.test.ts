@@ -47,7 +47,10 @@ describe("content iframe loading", () => {
     host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
     host.postMessage(message);
 
-    expect(postMessage).toHaveBeenCalledWith(message, "lanedeck://content");
+    expect(postMessage).toHaveBeenCalledWith(
+      message,
+      "http://lanedeck.localhost",
+    );
     expect(postMessage.mock.calls[0]?.[1]).not.toBe("*");
   });
 
