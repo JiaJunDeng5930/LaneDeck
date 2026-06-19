@@ -142,6 +142,7 @@ function isHostedContentMessage(
 function isAllowedContentOrigin(origin: string): boolean {
   return (
     origin === "lanedeck://localhost" ||
+    origin === "lanedeck://content" ||
     origin === "http://lanedeck.localhost" ||
     origin === "https://lanedeck.localhost" ||
     origin === "null"

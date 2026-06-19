@@ -220,11 +220,17 @@ export function createContentApp(deps: ContentDeps): ContentApp {
 
   function applyHostState(state: ShellHostState): void {
     hostState = { ...hostState, ...state };
+    if (
+      state.centerQueryUrl !== undefined &&
+      state.centerReadToken === undefined
+    ) {
+      delete hostState.centerReadToken;
+    }
     setPickerListening(state.pickerEnabled);
     if (state.centerQueryUrl !== undefined) {
       deps.query.setQueryUrl?.(state.centerQueryUrl);
-    }
-    if (state.centerReadToken !== undefined) {
+      deps.query.setReadToken?.(state.centerReadToken);
+    } else if (state.centerReadToken !== undefined) {
       deps.query.setReadToken?.(state.centerReadToken);
     }
   }

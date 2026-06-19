@@ -294,12 +294,14 @@ export function createIframeHost(
   iframe: HTMLIFrameElement,
   targetOrigin = "*",
 ): ContentFrameHost {
+  let currentTargetOrigin = targetOrigin;
   return {
     setSource(uri: string): void {
       iframe.src = uri;
+      currentTargetOrigin = targetOriginForContentUri(uri) ?? targetOrigin;
     },
     postMessage(message: ShellToContentMessage): void {
-      iframe.contentWindow?.postMessage(message, targetOrigin);
+      iframe.contentWindow?.postMessage(message, currentTargetOrigin);
     },
     onLoad(listener: () => void): () => void {
       iframe.addEventListener("load", listener);
@@ -321,6 +323,21 @@ export function createIframeHost(
       iframe.removeAttribute("src");
     },
   };
+}
+
+export function targetOriginForContentUri(uri: string): string | undefined {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+    if (parsed.protocol === "lanedeck:" && parsed.host.length > 0) {
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function defaultHostState(
