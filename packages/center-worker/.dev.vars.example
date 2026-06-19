@@ -1,0 +1,3 @@
+LANEDECK_AGENT_TOKEN=replace-with-agent-token
+LANEDECK_AI_MUTATION_TOKEN=replace-with-ai-mutation-token
+LANEDECK_READ_TOKEN=replace-with-read-token

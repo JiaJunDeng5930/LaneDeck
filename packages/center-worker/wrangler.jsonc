@@ -8,6 +8,13 @@
     "enabled": true,
     "head_sampling_rate": 1,
   },
+  "secrets": {
+    "required": [
+      "LANEDECK_AGENT_TOKEN",
+      "LANEDECK_AI_MUTATION_TOKEN",
+      "LANEDECK_READ_TOKEN",
+    ],
+  },
   "durable_objects": {
     "bindings": [
       {

@@ -9,9 +9,13 @@
   "scripts": {
     "build": "corepack pnpm -r build && cargo build --workspace",
     "check": "corepack pnpm -r check && cargo check --workspace",
+    "check:cloudflare": "bash scripts/cloudflare-center-ci.sh",
     "check:e2e": "tsc -p e2e/tsconfig.json --noEmit",
     "test": "corepack pnpm -r test && cargo test --workspace",
     "test:e2e": "bash scripts/e2e.sh",
+    "preflight:center": "bash scripts/cloudflare-center-preflight.sh",
+    "deploy:center": "bash scripts/cloudflare-center-deploy.sh",
+    "verify:center": "bash scripts/cloudflare-center-verify.sh",
     "lint": "corepack pnpm -r lint && cargo clippy --workspace --all-targets -- -D warnings",
     "format": "corepack pnpm -r format && cargo fmt --all",
     "ci": "corepack pnpm run check && corepack pnpm run test && corepack pnpm run test:e2e"

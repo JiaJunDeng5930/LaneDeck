@@ -15,13 +15,13 @@ import { handleRequest } from "./router";
 import { D1CenterStorage } from "./storage/d1";
 import { R2ContentStore } from "./storage/r2";
 import { WorkspaceService } from "./workspace";
-import type { WorkspaceRpcResult } from "./runtime-types";
+import type { CenterWorkerEnv, WorkspaceRpcResult } from "./runtime-types";
 
-export class WorkspaceCoordinator extends DurableObject<Env> {
+export class WorkspaceCoordinator extends DurableObject<CenterWorkerEnv> {
   private readonly live = new LiveHub();
   private readonly service: WorkspaceService;
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: DurableObjectState, env: CenterWorkerEnv) {
     super(ctx, env);
     restoreLiveSockets(
       this.live,
@@ -153,12 +153,12 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 export default {
   async fetch(
     request: Request,
-    env: Env,
+    env: CenterWorkerEnv,
     _ctx: ExecutionContext,
   ): Promise<Response> {
     return await handleRequest(request, env);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<CenterWorkerEnv>;
 
 async function rpcResult<T>(
   operation: () => Promise<T>,

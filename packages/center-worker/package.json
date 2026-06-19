@@ -9,7 +9,11 @@
     "test": "vitest run --passWithNoTests",
     "lint": "eslint src --ext .ts",
     "format": "prettier --check . --ignore-path ../../.prettierignore",
-    "deploy": "wrangler deploy"
+    "check:cloudflare": "bash ../../scripts/cloudflare-center-ci.sh",
+    "preflight": "bash ../../scripts/cloudflare-center-preflight.sh",
+    "deploy": "bash ../../scripts/cloudflare-center-deploy.sh",
+    "deploy:raw": "wrangler deploy --keep-vars",
+    "deploy:dry-run": "LANEDECK_AGENT_TOKEN=dry-run-agent-token LANEDECK_AI_MUTATION_TOKEN=dry-run-ai-mutation-token LANEDECK_READ_TOKEN=dry-run-read-token wrangler deploy --dry-run --strict --outdir .wrangler-dry-run"
   },
   "dependencies": {
     "@lanedeck/protocol": "workspace:*"

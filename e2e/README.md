@@ -29,6 +29,11 @@ The scenarios use `LANEDECK_READ_TOKEN` for center query reads, `LANEDECK_AI_MUT
 
 `LANEDECK_SHELL_CONTENT_ARTIFACT_WRITE_URL` is a harness-only endpoint. It accepts the content build-complete payload shape, or at minimum `{ workspaceId, contentRevision, entrypoint, artifacts }`, and writes artifacts into the HTTP content root served at `LANEDECK_SHELL_CONTENT_BASE_URL/{workspaceId}/{contentRevision}/{entrypoint}` before center promotion broadcasts a reload.
 
+The Cloudflare center deploy verification is narrower than full-system e2e.
+`corepack pnpm run verify:center` checks the deployed center Worker, D1, R2,
+auth boundaries, mutation flow, and content asset readback. Full e2e adds the
+local agent runtime, shell, live browser updates, and harness artifact writer.
+
 ## Scenario Files
 
 - `specs/agent-to-center-flow.spec.ts` covers count-triggered ingest, live update, shell/content visibility, spool ack observation, and time-triggered quiet-signal ingest. It seeds dashboard-capable current content before opening the shell, so a fresh center has the current-content pointer required by shell rendering.
