@@ -10,6 +10,7 @@ import {
   createContentApp,
   createHttpCenterQueryClient,
   registerPickTarget,
+  renderDashboardMarkup,
   type CenterQueryClient,
   type ShellBridge,
   type ShellHostState,
@@ -140,6 +141,63 @@ describe("content package contract", () => {
       document.root.innerHTML.indexOf("beta quiet frame"),
     );
     app.dispose();
+  });
+
+  it("renders unique fallback pick ids for same lane stage frame identities", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane.same",
+                stage: "event",
+                frameNo: 7,
+                batchId: "batch-a",
+                machineId: "machine-alpha",
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:01:00.000Z",
+              },
+              {
+                laneId: "lane.same",
+                stage: "event",
+                frameNo: 7,
+                batchId: "batch-b",
+                machineId: "machine-beta",
+                recordCount: 2,
+                triggerKind: "time",
+                closedAt: "2026-06-11T00:02:00.000Z",
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+    const framePickIds = rendered.pickIds.filter((pickId) =>
+      pickId.startsWith("packages/content/src/views.tsx#dashboard.frame"),
+    );
+
+    expect(framePickIds).toHaveLength(2);
+    expect(new Set(framePickIds).size).toBe(2);
+    expect(framePickIds[0]).toContain("lane.same:event:7");
+    expect(framePickIds[1]).toContain("lane.same:event:7");
+    expect(hasPickIdentity(framePickIds[0], ["batch-a", "frame-0"])).toBe(true);
+    expect(hasPickIdentity(framePickIds[0], ["machine-alpha", "frame-0"])).toBe(
+      true,
+    );
+    expect(hasPickIdentity(framePickIds[1], ["batch-b", "frame-1"])).toBe(true);
+    expect(hasPickIdentity(framePickIds[1], ["machine-beta", "frame-1"])).toBe(
+      true,
+    );
+    for (const pickId of framePickIds) {
+      expect(rendered.html).toContain(`data-pick-id="${pickId}"`);
+    }
   });
 
   it("uses the shell-provided center query URL and read token for initial dashboard render", async () => {
@@ -549,6 +607,10 @@ class FakeQuery implements CenterQueryClient {
     this.requests.push(request);
     return this.response;
   }
+}
+
+function hasPickIdentity(pickId: string, candidates: string[]): boolean {
+  return candidates.some((candidate) => pickId.includes(candidate));
 }
 
 class SequencedQuery implements CenterQueryClient {

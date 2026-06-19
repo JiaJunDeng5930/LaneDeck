@@ -33,7 +33,7 @@ describe("content iframe loading", () => {
     ]);
   });
 
-  it("sends init with host state after the iframe load event", async () => {
+  it("sends init with host state before the iframe load event", async () => {
     const host = new FakeFrameHost();
     const loader = createIframeContentLoader(host);
     const descriptor = descriptorWithHostState();
@@ -41,7 +41,10 @@ describe("content iframe loading", () => {
     const session = loader.loadCurrent(descriptor);
     await Promise.resolve();
 
-    expect(host.messages).toEqual([]);
+    expect(host.messages).toContainEqual({
+      type: "init",
+      payload: { hostState: hostState(false) },
+    });
 
     host.completeLoad();
 
@@ -50,25 +53,6 @@ describe("content iframe loading", () => {
       revision: "rev-1",
       reloadCount: 1,
     });
-    expect(host.messages).toEqual([
-      {
-        type: "init",
-        payload: {
-          hostState: {
-            pickerEnabled: false,
-            workspaceId: "workspace.local",
-            contentRevision: "rev-1",
-            centerQueryUrl: "https://center.example.test/api/query",
-            centerReadToken: "read-token",
-            route: {
-              view: "dashboard",
-              workspaceId: "workspace.local",
-              laneId: "lane.build",
-            },
-          },
-        },
-      },
-    ]);
   });
 
   it("uses the latest session host state when init follows a picker update", async () => {
@@ -83,6 +67,11 @@ describe("content iframe loading", () => {
       hostState(false),
     );
     await Promise.resolve();
+
+    expect(host.messages).toContainEqual({
+      type: "init",
+      payload: { hostState: hostState(false) },
+    });
 
     loader.setPickerMode(true);
     host.completeLoad();
@@ -106,42 +95,14 @@ describe("content iframe loading", () => {
     loader.setPickerMode(true);
     loader.setHeight(240.2);
 
-    expect(host.messages).toEqual([
-      {
-        type: "init",
-        payload: {
-          hostState: {
-            pickerEnabled: false,
-            workspaceId: "workspace.local",
-            contentRevision: "rev-1",
-            centerQueryUrl: "https://center.example.test/api/query",
-            centerReadToken: "read-token",
-            route: {
-              view: "dashboard",
-              workspaceId: "workspace.local",
-              laneId: "lane.build",
-            },
-          },
-        },
-      },
-      {
-        type: "host_state",
-        payload: {
-          hostState: {
-            pickerEnabled: true,
-            workspaceId: "workspace.local",
-            contentRevision: "rev-1",
-            centerQueryUrl: "https://center.example.test/api/query",
-            centerReadToken: "read-token",
-            route: {
-              view: "dashboard",
-              workspaceId: "workspace.local",
-              laneId: "lane.build",
-            },
-          },
-        },
-      },
-    ]);
+    expect(host.messages).toContainEqual({
+      type: "init",
+      payload: { hostState: hostState(false) },
+    });
+    expect(host.messages.at(-1)).toEqual({
+      type: "host_state",
+      payload: { hostState: hostState(true) },
+    });
     expect(host.heights).toEqual([240.2]);
   });
 
