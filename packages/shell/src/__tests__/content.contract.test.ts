@@ -64,35 +64,63 @@ describe("content iframe loading", () => {
     },
   );
 
-  it("posts token-bearing lanedeck iframe messages only to strict candidate origins", () => {
-    const postMessage = vi.fn();
-    const iframe = testIframe(postMessage);
-    const host = createIframeHost(iframe);
-    const message: ShellToContentMessage = {
-      type: "host_state",
-      payload: { hostState: hostState(false) },
-    };
+  it.each([
+    [
+      "init",
+      {
+        type: "init",
+        payload: { hostState: hostState(false) },
+      } satisfies ShellToContentMessage,
+    ],
+    [
+      "host_state",
+      {
+        type: "host_state",
+        payload: { hostState: hostState(false) },
+      } satisfies ShellToContentMessage,
+    ],
+  ])(
+    "downgrades wildcard copies of token-bearing lanedeck %s messages to picker-only host state",
+    (_type, message) => {
+      const postMessage = vi.fn();
+      const iframe = testIframe(postMessage);
+      const host = createIframeHost(iframe);
 
-    host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
-    host.postMessage(message);
+      host.setSource("lanedeck://content/workspace.local/rev-1/index.html");
+      host.postMessage(message);
 
-    const calls = postMessage.mock.calls;
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        [message, "lanedeck://content"],
-        [message, "http://lanedeck.localhost"],
-        [message, "https://lanedeck.localhost"],
-        [message, "lanedeck://localhost"],
-      ]),
-    );
-    const wildcardCalls = calls.filter((call) => call[1] === "*");
-    for (const [wildcardMessage] of wildcardCalls) {
-      const wildcardHostState = (
-        wildcardMessage as { payload: { hostState: Record<string, unknown> } }
-      ).payload.hostState;
-      expect(wildcardHostState).not.toHaveProperty("centerReadToken");
-    }
-  });
+      const calls = postMessage.mock.calls;
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          [message, "lanedeck://content"],
+          [message, "http://lanedeck.localhost"],
+          [message, "https://lanedeck.localhost"],
+          [message, "lanedeck://localhost"],
+        ]),
+      );
+      const wildcardCalls = calls.filter((call) => call[1] === "*");
+      for (const [wildcardMessage] of wildcardCalls) {
+        expect(wildcardMessage).toEqual({
+          type: message.type,
+          payload: { hostState: bootstrapHostState(false) },
+        });
+        for (const field of [
+          "centerReadToken",
+          "centerQueryUrl",
+          "route",
+          "workspaceId",
+          "contentRevision",
+        ]) {
+          const wildcardHostState = (
+            wildcardMessage as {
+              payload: { hostState: Record<string, unknown> };
+            }
+          ).payload.hostState;
+          expect(wildcardHostState).not.toHaveProperty(field);
+        }
+      }
+    },
+  );
 
   it.each([
     [
