@@ -3,7 +3,6 @@
   "name": "lanedeck-center",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-11",
-  "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,

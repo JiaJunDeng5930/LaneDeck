@@ -34,12 +34,6 @@ fn content_protocol_response(root: &Path, request_path: &str) -> Response<Vec<u8
     for path in lookup.candidates {
         if let Ok(body) = fs::read(&path) {
             let content_type = content_type(&path);
-            let body = rewrite_text_asset_references(
-                body,
-                content_type,
-                &lookup.workspace,
-                &lookup.revision,
-            );
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
@@ -52,8 +46,6 @@ fn content_protocol_response(root: &Path, request_path: &str) -> Response<Vec<u8
 }
 
 struct ContentLookup {
-    workspace: String,
-    revision: String,
     candidates: Vec<PathBuf>,
 }
 
@@ -72,8 +64,6 @@ fn content_candidates(root: &Path, request_path: &str) -> Result<ContentLookup, 
             root.join(&workspace).join(&revision).join(&rest),
             root.join(rest),
         ],
-        workspace,
-        revision,
     })
 }
 
@@ -150,51 +140,6 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-fn rewrite_text_asset_references(
-    body: Vec<u8>,
-    content_type: &str,
-    workspace: &str,
-    revision: &str,
-) -> Vec<u8> {
-    if !is_rewritable_text_type(content_type) {
-        return body;
-    }
-
-    match String::from_utf8(body) {
-        Ok(text) => rewrite_vite_asset_references(&text, workspace, revision).into_bytes(),
-        Err(error) => error.into_bytes(),
-    }
-}
-
-fn is_rewritable_text_type(content_type: &str) -> bool {
-    content_type.starts_with("text/html")
-        || content_type.starts_with("text/css")
-        || content_type.contains("javascript")
-}
-
-fn rewrite_vite_asset_references(text: &str, workspace: &str, revision: &str) -> String {
-    let asset_base = format!(
-        "/{}/{}/assets/",
-        encode_path_segment(workspace),
-        encode_path_segment(revision)
-    );
-    text.replace("\"/assets/", &format!("\"{asset_base}"))
-        .replace("'/assets/", &format!("'{asset_base}"))
-        .replace("url(/assets/", &format!("url({asset_base}"))
-}
-
-fn encode_path_segment(segment: &str) -> String {
-    let mut encoded = String::new();
-    for byte in segment.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
-}
-
 fn plain_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
@@ -210,9 +155,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use super::{
-        content_candidates, content_protocol_response, content_type, rewrite_vite_asset_references,
-    };
+    use super::{content_candidates, content_protocol_response, content_type};
 
     #[test]
     fn resolves_workspace_revision_content_and_dist_entry() {
@@ -243,24 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_root_vite_asset_references_for_custom_protocol() {
-        let rewritten = rewrite_vite_asset_references(
-            concat!(
-                r#"<script src="/assets/index.js"></script>"#,
-                r#"<link href='/assets/index.css'>"#,
-                r#"<style>.logo{background:url(/assets/logo.svg)}</style>"#,
-            ),
-            "workspace.local",
-            "rev 1",
-        );
-
-        assert!(rewritten.contains(r#""/workspace.local/rev%201/assets/index.js"#));
-        assert!(rewritten.contains(r#"'/workspace.local/rev%201/assets/index.css"#));
-        assert!(rewritten.contains("url(/workspace.local/rev%201/assets/logo.svg)"));
-    }
-
-    #[test]
-    fn serves_rewritten_html_asset_references() {
+    fn serves_html_asset_without_rewriting() {
         let root = std::env::temp_dir().join(format!(
             "lanedeck-shell-content-test-{}",
             std::process::id()
@@ -278,7 +204,7 @@ mod tests {
         let body = String::from_utf8(response.body().clone()).unwrap();
 
         assert_eq!(response.status(), 200);
-        assert!(body.contains(r#""/workspace.local/rev-1/assets/index.js"#));
+        assert!(body.contains(r#""/assets/index.js"#));
 
         fs::remove_dir_all(&root).unwrap();
     }

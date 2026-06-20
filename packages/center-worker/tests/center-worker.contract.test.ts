@@ -3,20 +3,16 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/errors";
 import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
 import { handleRequest } from "../src/router";
-import { rewriteViteAssetReferences } from "../src/storage/r2";
+import type {
+  ContentBuildRequestRecord,
+  ContentRevisionPromotion,
+  ContentRevisionRecord,
+  LaneRevisionRecord,
+} from "../src/storage/d1";
 import type {
   ContentBuildArtifactWrite,
-  ContentBuildObjectKeys,
-  ContentBuildRequestRecord,
-  CenterStorage,
-  ContentObjectStore,
   ContentObjectWrite,
-  ContentRevisionPromotion,
-  ContentRevisionPromotionResult,
-  ContentRevisionRecord,
-  ContentSourceObjectKeys,
-  LaneRevisionRecord,
-} from "../src/storage/types";
+} from "../src/storage/r2";
 import { WorkspaceService } from "../src/workspace";
 import type {
   IngestBatch,
@@ -135,12 +131,15 @@ describe("center-worker contract", () => {
   it("accepts the browser read session cookie for live WebSocket auth", async () => {
     let fetchedId: string | undefined;
     const response = await handleRequest(
-      new Request("https://center.local/ws/browser?workspaceId=workspace.local", {
-        headers: {
-          upgrade: "websocket",
-          cookie: "LaneDeckReadSession=read-token",
+      new Request(
+        "https://center.local/ws/browser?workspaceId=workspace.local",
+        {
+          headers: {
+            upgrade: "websocket",
+            cookie: "LaneDeckReadSession=read-token",
+          },
         },
-      }),
+      ),
       {
         ...createHarness().env,
         WORKSPACE_COORDINATOR: workspaceNamespace(
@@ -961,9 +960,7 @@ describe("center-worker contract", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.text()).resolves.toContain(
-      "workspace shell content",
-    );
+    await expect(response.text()).resolves.toContain("workspace shell content");
   });
 
   it("GET /content-by-workspace rejects encoded separators in workspace segments", async () => {
@@ -2093,17 +2090,6 @@ describe("center-worker contract", () => {
       expect.objectContaining({ type: "build_content" }),
     );
   });
-
-  it("rewrites Vite root asset URLs into revision-scoped content URLs", () => {
-    expect(
-      rewriteViteAssetReferences(
-        '<link rel="stylesheet" href="/assets/index.css"><script src="/assets/index.js"></script>',
-        "revision-1",
-      ),
-    ).toBe(
-      '<link rel="stylesheet" href="/content/revision-1/assets/index.css"><script src="/content/revision-1/assets/index.js"></script>',
-    );
-  });
 });
 
 function createHarness(
@@ -2245,13 +2231,13 @@ class RouteR2Bucket {
   }
 }
 
-class MemoryContentObjectStore implements ContentObjectStore {
+class MemoryContentObjectStore {
   readonly writes = new Map<string, string>();
   buildArtifactWriteCount = 0;
 
   async writeContentSource(
     write: ContentObjectWrite,
-  ): Promise<ContentSourceObjectKeys> {
+  ): Promise<{ sourceKey: string }> {
     const sourceKey = [
       "content-source",
       write.workspaceId,
@@ -2274,7 +2260,7 @@ class MemoryContentObjectStore implements ContentObjectStore {
 
   async writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
-  ): Promise<ContentBuildObjectKeys> {
+  ): Promise<{ entrypointKey: string; assetKeys: string[] }> {
     this.buildArtifactWriteCount += 1;
     const assetKeys: string[] = [];
     let entrypointKey = "";
@@ -2316,14 +2302,14 @@ class BlockingContentObjectStore extends MemoryContentObjectStore {
 
   override async writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
-  ): Promise<ContentBuildObjectKeys> {
+  ): Promise<{ entrypointKey: string; assetKeys: string[] }> {
     this.markArtifactWriteStarted();
     await this.artifactWriteReleased;
     return await super.writeContentBuildArtifacts(write);
   }
 }
 
-class MemoryCenterStorage implements CenterStorage {
+class MemoryCenterStorage {
   readonly batches: IngestBatch[] = [];
   readonly frames: IngestBatch["frames"] = [];
   readonly contentRevisions: ContentRevisionRecord[] = [];
@@ -2399,7 +2385,7 @@ class MemoryCenterStorage implements CenterStorage {
 
   async promoteContentRevision(
     promotion: ContentRevisionPromotion,
-  ): Promise<ContentRevisionPromotionResult> {
+  ): Promise<{ record: ContentRevisionRecord; isCurrent: boolean }> {
     this.writeCount += 1;
     const record = this.contentRevisions.find(
       (candidate) =>
@@ -2576,7 +2562,7 @@ function seedContentRevision(
 class SupersededStorage extends MemoryCenterStorage {
   async promoteContentRevision(
     promotion: ContentRevisionPromotion,
-  ): Promise<ContentRevisionPromotionResult> {
+  ): Promise<{ record: ContentRevisionRecord; isCurrent: boolean }> {
     const previousCurrent = this.currentContentRevision;
     const result = await super.promoteContentRevision(promotion);
     this.currentContentRevision = previousCurrent;

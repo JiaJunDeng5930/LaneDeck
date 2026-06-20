@@ -16,5 +16,3 @@ pub use types::{
     ScriptRunOutput, ScriptRunRequest, ScriptSideEffectPolicy, SpoolEntry, SpoolEntryId,
     SpoolEntryState, WorkingDirectory,
 };
-
-pub const PACKAGE_NAME: &str = "lanedeck-agent-runtime";

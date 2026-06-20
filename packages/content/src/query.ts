@@ -3,6 +3,7 @@ import type {
   QueryRequest,
   QueryResponse,
 } from "@lanedeck/protocol";
+import { ProtocolError, parseQueryResponse } from "@lanedeck/protocol";
 
 import { ContentError } from "./errors";
 
@@ -58,7 +59,17 @@ export function createHttpCenterQueryClient(
         );
       }
 
-      return parseQueryResponse(await response.json());
+      try {
+        return parseQueryResponse(await response.json());
+      } catch (error) {
+        if (error instanceof ProtocolError) {
+          throw new ContentError(
+            "center query response is invalid",
+            JSON.stringify(error.diagnostics),
+          );
+        }
+        throw error;
+      }
     },
   };
 }
@@ -79,120 +90,6 @@ function dashboardParams(route: DashboardContentRoute): JsonObject {
     ...(route.params ?? {}),
     ...(route.laneId === undefined ? {} : { laneId: route.laneId }),
   };
-}
-
-function parseQueryResponse(input: unknown): QueryResponse {
-  if (!isRecord(input)) {
-    throw new ContentError("center query response must be an object");
-  }
-
-  const rows = denseArray(input.rows, "rows");
-  const diagnostics = denseArray(input.diagnostics, "diagnostics");
-
-  return {
-    rows: rows.map((row, index) =>
-      parseJsonObject(row, `rows.${index}`, new WeakSet<object>()),
-    ),
-    diagnostics: diagnostics.map((diagnostic, index) => {
-      if (!isRecord(diagnostic)) {
-        throw new ContentError(`diagnostics.${index} must be an object`);
-      }
-
-      if (
-        typeof diagnostic.path !== "string" ||
-        typeof diagnostic.message !== "string"
-      ) {
-        throw new ContentError(
-          `diagnostics.${index} must carry path and message`,
-        );
-      }
-
-      return {
-        path: diagnostic.path,
-        message: diagnostic.message,
-      };
-    }),
-  };
-}
-
-function denseArray(input: unknown, path: string): unknown[] {
-  if (!Array.isArray(input)) {
-    throw new ContentError(`center query response ${path} must be an array`);
-  }
-  for (let index = 0; index < input.length; index += 1) {
-    if (!(index in input)) {
-      throw new ContentError(`${path}.${index} must be JSON`);
-    }
-  }
-  return Array.from(input);
-}
-
-function parseJsonObject(
-  input: unknown,
-  path: string,
-  activeContainers: WeakSet<object>,
-): JsonObject {
-  if (!isRecord(input)) {
-    throw new ContentError(`${path} must be an object`);
-  }
-
-  if (activeContainers.has(input)) {
-    throw new ContentError(`${path} must be acyclic JSON`);
-  }
-  activeContainers.add(input);
-  for (const [key, value] of Object.entries(input)) {
-    assertJsonValue(value, `${path}.${key}`, activeContainers);
-  }
-  activeContainers.delete(input);
-
-  return input;
-}
-
-function assertJsonValue(
-  input: unknown,
-  path: string,
-  activeContainers: WeakSet<object>,
-): void {
-  if (
-    input === null ||
-    typeof input === "string" ||
-    typeof input === "boolean"
-  ) {
-    return;
-  }
-
-  if (typeof input === "number" && Number.isFinite(input)) {
-    return;
-  }
-
-  if (Array.isArray(input)) {
-    if (activeContainers.has(input)) {
-      throw new ContentError(`${path} must be acyclic JSON`);
-    }
-    activeContainers.add(input);
-    const array = denseArray(input, path);
-    array.forEach((item, index) =>
-      assertJsonValue(item, `${path}.${index}`, activeContainers),
-    );
-    activeContainers.delete(input);
-    return;
-  }
-
-  if (isRecord(input)) {
-    parseJsonObject(input, path, activeContainers);
-    return;
-  }
-
-  throw new ContentError(`${path} must be JSON`);
-}
-
-function isRecord(input: unknown): input is JsonObject {
-  return (
-    typeof input === "object" &&
-    input !== null &&
-    !Array.isArray(input) &&
-    Object.getPrototypeOf(input) === Object.prototype
-  );
 }
 
 export type ContentRoute = DashboardContentRoute | CustomContentRoute;

@@ -1,5 +1,3 @@
-export const protocolPackage = "@lanedeck/protocol";
-
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 
@@ -266,6 +264,23 @@ export function parseQueryRequest(input: unknown): QueryRequest {
   return request;
 }
 
+export function parseQueryResponse(input: unknown): QueryResponse {
+  const validator = new Validator();
+  const object = validator.object(input, "$");
+  const response: QueryResponse = {
+    rows: validator
+      .array(object.rows, "rows")
+      .map((row, index) => validator.jsonObject(row, `rows.${index}`)),
+    diagnostics: validator
+      .array(object.diagnostics, "diagnostics")
+      .map((diagnostic, index) =>
+        parseDiagnostic(diagnostic, `diagnostics.${index}`, validator),
+      ),
+  };
+  validator.finish();
+  return response;
+}
+
 export function parseMutationRequest(input: unknown): MutationRequest {
   const validator = new Validator();
   const object = validator.object(input, "$");
@@ -513,6 +528,18 @@ function parseContentBuildArtifact(
             joinPath(path, "contentType"),
           ),
         }),
+  };
+}
+
+function parseDiagnostic(
+  input: unknown,
+  path: string,
+  validator: Validator,
+): Diagnostic {
+  const object = validator.object(input, path);
+  return {
+    path: validator.string(object.path, joinPath(path, "path")),
+    message: validator.string(object.message, joinPath(path, "message")),
   };
 }
 

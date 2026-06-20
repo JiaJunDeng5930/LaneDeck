@@ -3,54 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER_DIR="$ROOT_DIR/packages/center-worker"
-EXPECTED_D1_DATABASE_ID="5d3e97c4-131f-4162-8c8c-b0d95366648b"
-R2_BUCKET_NAME="lanedeck"
-D1_DATABASE_NAME="lanedeck"
-WORKER_NAME="lanedeck-center"
-
-require_command() {
-  if command -v "$1" >/dev/null 2>&1; then
-    return
-  fi
-
-  echo "missing command: $1" >&2
-  exit 127
-}
-
-run_wrangler() {
-  local output
-  local status
-
-  set +e
-  output="$(
-    env \
-      -u LANEDECK_AGENT_TOKEN \
-      -u LANEDECK_AI_MUTATION_TOKEN \
-      -u LANEDECK_READ_TOKEN \
-      corepack pnpm exec wrangler "$@" 2>&1
-  )"
-  status=$?
-  set -e
-
-  printf '%s' "$output"
-  return "$status"
-}
-
-classify_r2_failure() {
-  local output="$1"
-
-  if grep -Eiq '10042|Please enable R2|NotEntitled|not entitled' <<<"$output"; then
-    echo "r2_not_enabled"
-    return
-  fi
-
-  if grep -Eiq 'not found|does not exist|could not find|no such bucket|missing bucket' <<<"$output"; then
-    echo "bucket_missing"
-    return
-  fi
-
-  echo "unknown"
-}
+source "$ROOT_DIR/scripts/cloudflare-center-lib.sh"
 
 require_command corepack
 require_command jq
@@ -69,12 +22,7 @@ if grep -Eiq 'not authenticated|not logged in|please run.*wrangler login' <<<"$w
   exit 1
 fi
 
-d1_json="$(run_wrangler d1 info "$D1_DATABASE_NAME" --json)"
-d1_id="$(jq -er '.uuid // .id // .database_id' <<<"$d1_json")"
-if [[ "$d1_id" != "$EXPECTED_D1_DATABASE_ID" ]]; then
-  echo "D1 database id mismatch: expected $EXPECTED_D1_DATABASE_ID, got $d1_id" >&2
-  exit 1
-fi
+require_lanedeck_d1
 
 r2_output="$(run_wrangler r2 bucket info "$R2_BUCKET_NAME" --json)" || {
   r2_kind="$(classify_r2_failure "$r2_output")"
@@ -95,10 +43,7 @@ r2_output="$(run_wrangler r2 bucket info "$R2_BUCKET_NAME" --json)" || {
   esac
 }
 
-if env \
-  -u LANEDECK_AGENT_TOKEN \
-  -u LANEDECK_AI_MUTATION_TOKEN \
-  -u LANEDECK_READ_TOKEN \
+if without_lanedeck_env \
   LANEDECK_AGENT_TOKEN=preflight-agent-token \
   LANEDECK_AI_MUTATION_TOKEN=preflight-ai-mutation-token \
   LANEDECK_READ_TOKEN=preflight-read-token \

@@ -1,18 +1,26 @@
+import type { ContentBuildArtifact } from "@lanedeck/protocol";
+
 import { badRequest } from "../errors";
 
-import type {
-  ContentBuildArtifactWrite,
-  ContentBuildObjectKeys,
-  ContentObjectWrite,
-  ContentSourceObjectKeys,
-} from "./types";
+export interface ContentObjectWrite {
+  workspaceId: string;
+  revision: string;
+  sourcePath: string;
+  source: string;
+}
+
+export interface ContentBuildArtifactWrite {
+  revision: string;
+  entrypoint: string;
+  artifacts: ContentBuildArtifact[];
+}
 
 export class R2ContentStore {
   constructor(private readonly bucket: R2Bucket) {}
 
   async writeContentSource(
     write: ContentObjectWrite,
-  ): Promise<ContentSourceObjectKeys> {
+  ): Promise<{ sourceKey: string }> {
     const sourcePath = normalizeObjectPath(write.sourcePath, "payload.path");
     validateContentSource(write.source, "payload.source");
     const sourceKey = [
@@ -46,7 +54,7 @@ export class R2ContentStore {
 
   async writeContentBuildArtifacts(
     write: ContentBuildArtifactWrite,
-  ): Promise<ContentBuildObjectKeys> {
+  ): Promise<{ entrypointKey: string; assetKeys: string[] }> {
     const revision = normalizeObjectPath(write.revision, "contentRevision");
     const entrypoint = normalizeObjectPath(write.entrypoint, "entrypoint");
     const artifacts = write.artifacts.map((artifact, index) => ({
@@ -111,20 +119,6 @@ export class R2ContentStore {
 
     const contentType =
       object.httpMetadata?.contentType ?? contentTypeFor(normalizedAssetPath);
-    if (
-      normalizedAssetPath.endsWith(".html") ||
-      normalizedAssetPath.endsWith(".css") ||
-      normalizedAssetPath.endsWith(".js") ||
-      contentType.startsWith("text/html") ||
-      contentType.startsWith("text/css") ||
-      contentType.includes("javascript")
-    ) {
-      return new Response(
-        rewriteViteAssetReferences(await object.text(), normalizedRevision),
-        { headers: { "content-type": contentType } },
-      );
-    }
-
     return new Response(object.body, {
       headers: { "content-type": contentType },
     });
@@ -160,20 +154,6 @@ function validateContentSource(value: string, path: string): void {
     path,
     "expected non-empty content source",
   );
-}
-
-export function rewriteViteAssetReferences(
-  text: string,
-  revision: string,
-): string {
-  const assetBase = `/content/${normalizeObjectPath(
-    revision,
-    "revision",
-  )}/assets/`;
-  return text
-    .replaceAll('"/assets/', `"${assetBase}`)
-    .replaceAll("'/assets/", `'${assetBase}`)
-    .replace(/url\((\s*)\/assets\//g, `url($1${assetBase}`);
 }
 
 export function normalizeObjectPath(value: string, path: string): string {

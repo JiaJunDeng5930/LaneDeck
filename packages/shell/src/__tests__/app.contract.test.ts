@@ -29,7 +29,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -57,7 +57,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -84,7 +84,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -122,7 +122,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -150,7 +150,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -176,7 +176,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -193,7 +193,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive({ pendingConnect: true }),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
       liveConnectTimeoutMs: 0,
     });
@@ -212,7 +212,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
       liveConnectTimeoutMs: 0,
       onLiveConnectionChange(connected) {
@@ -243,7 +243,7 @@ describe("shell app contract", () => {
       center: new FakeCenter([descriptor("workspace.local", "rev-1")]),
       live,
       contentLoader: new FakeContentLoader(),
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
       onLiveConnectionChange(connected) {
         liveChanges.push(connected);
@@ -267,7 +267,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -299,7 +299,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -332,7 +332,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard,
+      clipboard: clipboard.writer,
       now: fixedNow,
     });
 
@@ -363,7 +363,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -384,7 +384,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard,
+      clipboard: clipboard.writer,
       now: fixedNow,
     });
 
@@ -412,7 +412,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard,
+      clipboard: clipboard.writer,
       now: fixedNow,
     });
 
@@ -435,7 +435,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard({ failWrites: true }),
+      clipboard: new FakeClipboard({ failWrites: true }).writer,
       now: fixedNow,
     });
 
@@ -468,7 +468,7 @@ describe("shell app contract", () => {
       center: new FakeCenter([descriptor("workspace.local", "rev-1")]),
       live: new FakeLive(),
       contentLoader: new FakeContentLoader(),
-      clipboard,
+      clipboard: clipboard.writer,
       now: fixedNow,
     });
 
@@ -488,7 +488,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -529,7 +529,7 @@ describe("shell app contract", () => {
       center,
       live,
       contentLoader: content,
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -563,7 +563,7 @@ describe("shell app contract", () => {
       center,
       live: new FakeLive(),
       contentLoader: new FakeContentLoader(),
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -588,7 +588,7 @@ describe("shell app contract", () => {
       }),
       live: new FakeLive(),
       contentLoader: new FakeContentLoader(),
-      clipboard: new FakeClipboard(),
+      clipboard: new FakeClipboard().writer,
       now: fixedNow,
     });
 
@@ -773,27 +773,27 @@ class FakeContentLoader implements ContentLoader {
   }
 }
 
-class FakeClipboard implements ClipboardWriter {
+class FakeClipboard {
   readonly writes: string[] = [];
 
   constructor(private readonly options: { failWrites?: boolean } = {}) {}
 
-  async writeText(text: string): Promise<void> {
+  readonly writer: ClipboardWriter = async (text) => {
     if (this.options.failWrites === true) {
       throw new Error("clipboard unavailable");
     }
     this.writes.push(text);
-  }
+  };
 }
 
-class DeferredClipboard implements ClipboardWriter {
+class DeferredClipboard {
   private readonly writeStarted = deferredPromise<void>();
   private readonly writeFinished = deferredPromise<void>();
 
-  async writeText(_text: string): Promise<void> {
+  readonly writer: ClipboardWriter = async (_text) => {
     this.writeStarted.resolve();
     await this.writeFinished.promise;
-  }
+  };
 
   async waitForWrite(): Promise<void> {
     await this.writeStarted.promise;

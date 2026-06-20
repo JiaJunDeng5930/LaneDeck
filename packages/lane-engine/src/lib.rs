@@ -6,8 +6,6 @@ use thiserror::Error;
 
 pub use lanedeck_protocol::{StageInvocation, StageResult};
 
-pub const PACKAGE_NAME: &str = "lanedeck-lane-engine";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRequest {
     pub lane_id: String,

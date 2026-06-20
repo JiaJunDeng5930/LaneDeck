@@ -1,4 +1,4 @@
-import { protocolPackage, type ShellContentMessage } from "@lanedeck/protocol";
+import type { ShellContentMessage } from "@lanedeck/protocol";
 
 import { ContentError, errorDetail } from "./errors";
 import {
@@ -57,7 +57,7 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         applyHostState(init.hostState);
         await send({
           type: "ready",
-          payload: { package: protocolPackage },
+          payload: { package: "@lanedeck/protocol" },
         });
 
         const route = init.route ?? init.hostState.route;

@@ -16,21 +16,67 @@ import type {
 import { ApiError, badRequest } from "./errors";
 import { LiveHub, type LiveSocket } from "./live";
 import { contentRevisionToJson } from "./storage/d1";
+import type {
+  ContentBuildRequestRecord,
+  ContentRevisionPromotion,
+  ContentRevisionRecord,
+  LaneRevisionRecord,
+} from "./storage/d1";
 import { normalizeObjectPath } from "./storage/r2";
 
-import type {
-  CenterStorage,
-  ContentObjectStore,
-  ContentRevisionRecord,
-} from "./storage/types";
-
 export interface WorkspaceServiceOptions {
-  storage: CenterStorage;
-  contentStore: ContentObjectStore;
+  storage: WorkspaceStorage;
+  contentStore: WorkspaceContentStore;
   live: LiveHub;
   clock?: () => string;
   idGenerator?: () => string;
 }
+
+type WorkspaceStorage = {
+  initialize(): Promise<void>;
+  saveIngestBatch(batch: IngestBatch, ingestedAt: string): Promise<void>;
+  getCurrentState(workspaceId: string): Promise<JsonObject>;
+  saveContentSourceRevision(record: ContentRevisionRecord): Promise<void>;
+  getContentRevision(
+    workspaceId: string,
+    revision: string,
+  ): Promise<ContentRevisionRecord | null>;
+  promoteContentRevision(
+    promotion: ContentRevisionPromotion,
+  ): Promise<{ record: ContentRevisionRecord; isCurrent: boolean }>;
+  getCurrentContent(workspaceId: string): Promise<ContentRevisionRecord | null>;
+  saveContentBuildRequest(record: ContentBuildRequestRecord): Promise<void>;
+  getContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<ContentBuildRequestRecord | null>;
+  claimContentBuildRequest(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<boolean>;
+  releaseContentBuildRequestClaim(
+    workspaceId: string,
+    buildRequestId: string,
+  ): Promise<void>;
+  saveLaneRevision(record: LaneRevisionRecord): Promise<boolean>;
+  listCurrentLaneRevisions(workspaceId: string): Promise<LaneRevisionRecord[]>;
+  saveMutation(request: MutationRequest, mutationId: string): Promise<number>;
+};
+
+type WorkspaceContentStore = {
+  writeContentSource(write: {
+    workspaceId: string;
+    revision: string;
+    sourcePath: string;
+    source: string;
+  }): Promise<{ sourceKey: string }>;
+  readContentSource(sourceKey: string): Promise<string>;
+  writeContentBuildArtifacts(write: {
+    revision: string;
+    entrypoint: string;
+    artifacts: ContentBuildCompleteRequest["artifacts"];
+  }): Promise<{ entrypointKey: string; assetKeys: string[] }>;
+};
 
 interface PatchContentPayload {
   sourcePath: string;

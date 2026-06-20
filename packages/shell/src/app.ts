@@ -20,7 +20,7 @@ import {
   type LoadedContentSession,
 } from "./content";
 import {
-  PickerController,
+  copyPickId,
   type ClipboardWriter,
   type PickCopyResult,
 } from "./picker";
@@ -56,9 +56,9 @@ type ShellState =
   | "Stopped";
 
 export function createShellApp(deps: ShellDeps): ShellApp {
-  const picker = new PickerController(deps.clipboard);
   const now = deps.now ?? (() => new Date().toISOString());
   let state: ShellState = "Created";
+  let pickerEnabled = false;
   let liveConnection: BrowserLiveConnection | undefined;
   let activeSession: LoadedContentSession | undefined;
   let loadTail: Promise<void> = Promise.resolve();
@@ -104,8 +104,8 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       }
       if (session.status === "ready") {
         activeSession = session;
-        state = picker.isEnabled() ? "PickerArmed" : "ContentReady";
-        if (picker.isEnabled()) {
+        state = pickerEnabled ? "PickerArmed" : "ContentReady";
+        if (pickerEnabled) {
           deps.contentLoader.setPickerMode(true);
         }
         deps.onContentSession?.(session);
@@ -180,7 +180,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       if (state === "Stopped") {
         return;
       }
-      picker.setEnabled(enabled);
+      pickerEnabled = enabled;
       deps.contentLoader.setPickerMode(enabled);
       deps.onPickerModeChange?.(enabled);
       if (enabled && state === "ContentReady") {
@@ -201,8 +201,8 @@ export function createShellApp(deps: ShellDeps): ShellApp {
         switch (parsed.type) {
           case "ready":
             if (activeSession !== undefined) {
-              state = picker.isEnabled() ? "PickerArmed" : "ContentReady";
-              if (picker.isEnabled()) {
+              state = pickerEnabled ? "PickerArmed" : "ContentReady";
+              if (pickerEnabled) {
                 deps.contentLoader.setPickerMode(true);
               }
             }
@@ -212,12 +212,15 @@ export function createShellApp(deps: ShellDeps): ShellApp {
             state = activeSession === undefined ? state : "ContentReady";
             return;
           case "pick_result": {
-            if (!picker.isEnabled()) {
+            if (!pickerEnabled) {
               return;
             }
             const generation = lifecycleGeneration;
             state = "PickCopied";
-            const result = await picker.copyPickId(parsed.payload.pickId);
+            const result = await copyPickId(
+              deps.clipboard,
+              parsed.payload.pickId,
+            );
             if (isStaleGeneration(generation)) {
               return;
             }
@@ -320,7 +323,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       ? (descriptor.centerReadToken ?? access?.readToken)
       : undefined;
     return {
-      pickerEnabled: picker.isEnabled(),
+      pickerEnabled,
       workspaceId: descriptor.workspaceId,
       contentRevision: descriptor.revision,
       route: descriptor.route ?? dashboardRoute(descriptor.workspaceId),
@@ -334,7 +337,7 @@ export function createShellApp(deps: ShellDeps): ShellApp {
   }
 
   async function finishPickerCopy(result: PickCopyResult): Promise<void> {
-    picker.setEnabled(false);
+    pickerEnabled = false;
     deps.contentLoader.setPickerMode(false);
     deps.onPickerModeChange?.(false);
     if (result.status === "failed") {

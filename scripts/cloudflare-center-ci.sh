@@ -3,15 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKER_DIR="$ROOT_DIR/packages/center-worker"
-
-require_command() {
-  if command -v "$1" >/dev/null 2>&1; then
-    return
-  fi
-
-  echo "missing command: $1" >&2
-  exit 127
-}
+source "$ROOT_DIR/scripts/cloudflare-center-lib.sh"
 
 require_command corepack
 
@@ -20,6 +12,7 @@ bash "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh"
 bash -n \
   "$ROOT_DIR/scripts/cloudflare-center-ci.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-deploy.sh" \
+  "$ROOT_DIR/scripts/cloudflare-center-lib.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-preflight.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-shell-build.sh" \
   "$ROOT_DIR/scripts/cloudflare-center-verify.sh" \

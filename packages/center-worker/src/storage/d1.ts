@@ -7,14 +7,51 @@ import type {
   MutationRequest,
 } from "@lanedeck/protocol";
 
-import type {
-  CenterStorage,
-  ContentBuildRequestRecord,
-  ContentRevisionRecord,
-  ContentRevisionPromotion,
-  ContentRevisionPromotionResult,
-  LaneRevisionRecord,
-} from "./types";
+export interface ContentRevisionRecord {
+  workspaceId: string;
+  mutationId: string;
+  mutationSequence: number;
+  revision: string;
+  sourcePath: string;
+  contentPath: string;
+  sourceKey: string;
+  assetKey: string | null;
+  createdAt: string;
+  metadata: JsonObject;
+}
+
+export interface LaneRevisionRecord {
+  workspaceId: string;
+  mutationId: string;
+  mutationSequence: number;
+  laneId: string;
+  revision: string;
+  settings: JsonObject;
+  createdAt: string;
+}
+
+export interface ContentBuildRequestRecord {
+  workspaceId: string;
+  buildRequestId: string;
+  mutationId: string;
+  machineId: string;
+  contentId: string;
+  contentRevision: string;
+  cwd: string;
+  command: string;
+  createdAt: string;
+  status: "pending" | "claimed" | "completed";
+  completedAt: string | null;
+}
+
+export interface ContentRevisionPromotion {
+  workspaceId: string;
+  revision: string;
+  contentPath: string;
+  assetKey: string;
+  promotedAt: string;
+  buildRequestId?: string;
+}
 
 interface FrameRow {
   machine_id: string;
@@ -79,7 +116,7 @@ const schemaStatements = [
   "CREATE TABLE IF NOT EXISTS workspace_pointers (workspace_id TEXT NOT NULL, pointer_key TEXT NOT NULL, pointer_value TEXT NOT NULL, pointer_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (workspace_id, pointer_key))",
 ];
 
-export class D1CenterStorage implements CenterStorage {
+export class D1CenterStorage {
   constructor(private readonly db: D1Database) {}
 
   async initialize(): Promise<void> {
@@ -200,7 +237,7 @@ export class D1CenterStorage implements CenterStorage {
 
   async promoteContentRevision(
     promotion: ContentRevisionPromotion,
-  ): Promise<ContentRevisionPromotionResult> {
+  ): Promise<{ record: ContentRevisionRecord; isCurrent: boolean }> {
     const existing = await this.getContentRevision(
       promotion.workspaceId,
       promotion.revision,

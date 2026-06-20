@@ -11,9 +11,10 @@ name = "lanedeck_lane_engine"
 path = "src/lib.rs"
 
 [dependencies]
-async-trait.workspace = true
 chrono.workspace = true
 lanedeck-protocol = { path = "../protocol" }
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true

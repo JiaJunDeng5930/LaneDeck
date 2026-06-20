@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { D1CenterStorage } from "../src/storage/d1";
-import { R2ContentStore, rewriteViteAssetReferences } from "../src/storage/r2";
+import { R2ContentStore } from "../src/storage/r2";
 
 import type { IngestBatch } from "@lanedeck/protocol";
 import type {
   ContentBuildRequestRecord,
   ContentRevisionRecord,
   LaneRevisionRecord,
-} from "../src/storage/types";
+} from "../src/storage/d1";
 
 describe("center-worker storage contract", () => {
   it("initializes an index for current state frame reads", async () => {
@@ -335,20 +335,6 @@ describe("center-worker storage contract", () => {
     ]);
   });
 
-  it("rewrites root Vite asset URLs in HTML and CSS text", () => {
-    expect(
-      rewriteViteAssetReferences(
-        [
-          '<link rel="stylesheet" href="/assets/index.css">',
-          "@font-face { src: url(/assets/font.woff2); }",
-          ".logo { background-image: url('/assets/logo.svg'); }",
-          '.hero { background-image: url("/assets/hero.png"); }',
-        ].join("\n"),
-        "revision-1",
-      ),
-    ).toContain("/content/revision-1/assets/font.woff2");
-  });
-
   it("stores content source separately from served build artifacts", async () => {
     const bucket = new FakeR2Bucket();
     const store = new R2ContentStore(bucket as unknown as R2Bucket);
@@ -495,7 +481,7 @@ describe("center-worker storage contract", () => {
     expect(bucket.objectBody("content/revision-3/index.html")).toBeNull();
   });
 
-  it("rewrites CSS asset responses before serving them", async () => {
+  it("serves CSS asset responses without rewriting them", async () => {
     const bucket = new FakeR2Bucket();
     bucket.putObject(
       "content/revision-1/assets/index.css",
@@ -509,11 +495,11 @@ describe("center-worker storage contract", () => {
 
     expect(response).not.toBeNull();
     await expect(response?.text()).resolves.toBe(
-      "@font-face { src: url(/content/revision-1/assets/font.woff2); }",
+      "@font-face { src: url(/assets/font.woff2); }",
     );
   });
 
-  it("rewrites JavaScript asset responses before serving them", async () => {
+  it("serves JavaScript asset responses without rewriting them", async () => {
     const bucket = new FakeR2Bucket();
     bucket.putObject(
       "content/revision-1/assets/index.js",
@@ -527,7 +513,7 @@ describe("center-worker storage contract", () => {
 
     expect(response).not.toBeNull();
     await expect(response?.text()).resolves.toBe(
-      'const logo = "/content/revision-1/assets/logo.svg";',
+      'const logo = "/assets/logo.svg";',
     );
   });
 
@@ -572,20 +558,6 @@ describe("center-worker storage contract", () => {
     ).rejects.toMatchObject({
       code: "invalid_object_path",
       diagnostics: [expect.objectContaining({ path: "assetPath" })],
-    });
-
-    let rewriteError: unknown;
-    try {
-      rewriteViteAssetReferences(
-        'const logo = "/assets/logo.svg";',
-        "bad\\rev",
-      );
-    } catch (error) {
-      rewriteError = error;
-    }
-    expect(rewriteError).toMatchObject({
-      code: "invalid_object_path",
-      diagnostics: [expect.objectContaining({ path: "revision" })],
     });
   });
 });

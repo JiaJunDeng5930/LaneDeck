@@ -40,4 +40,4 @@ export {
   targetOriginForContentUri,
 } from "./content";
 export type { ClipboardWriter, PickCopyResult } from "./picker";
-export { PickerController, createNavigatorClipboardWriter } from "./picker";
+export { copyPickId, createNavigatorClipboardWriter } from "./picker";

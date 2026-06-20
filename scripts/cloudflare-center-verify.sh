@@ -1,48 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REQUIRED_ENV=(
-  LANEDECK_CENTER_URL
-  LANEDECK_AGENT_TOKEN
-  LANEDECK_AI_MUTATION_TOKEN
-  LANEDECK_READ_TOKEN
-)
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/cloudflare-center-lib.sh"
 
 RESPONSE_STATUS=""
 RESPONSE_BODY=""
-
-require_command() {
-  if command -v "$1" >/dev/null 2>&1; then
-    return
-  fi
-
-  echo "missing command: $1" >&2
-  exit 127
-}
-
-require_env() {
-  local missing=()
-  local name
-  for name in "${REQUIRED_ENV[@]}"; do
-    if [[ -z "${!name:-}" ]]; then
-      missing+=("$name")
-      continue
-    fi
-    if [[ "$name" == LANEDECK_*_TOKEN && ( "${!name}" == *$'\n'* || "${!name}" == *$'\r'* ) ]]; then
-      echo "$name contains an unsupported newline character" >&2
-      exit 64
-    fi
-  done
-
-  if ((${#missing[@]} == 0)); then
-    return
-  fi
-
-  printf 'missing required environment variables:' >&2
-  printf ' %s' "${missing[@]}" >&2
-  printf '\n' >&2
-  exit 64
-}
 
 curl_request() {
   local method="$1"
@@ -86,11 +49,7 @@ curl_request() {
 
   set +e
   status="$(
-    env \
-      -u LANEDECK_AGENT_TOKEN \
-      -u LANEDECK_AI_MUTATION_TOKEN \
-      -u LANEDECK_READ_TOKEN \
-      curl --config "$config"
+    without_lanedeck_env curl --config "$config"
   )"
   curl_status=$?
   set -e
@@ -118,7 +77,7 @@ expect_status() {
 require_command curl
 require_command jq
 require_command base64
-require_env
+require_env_names "${LANEDECK_DEPLOY_ENV[@]}"
 
 CENTER_URL="${LANEDECK_CENTER_URL%/}"
 WORKSPACE_ID="${LANEDECK_VERIFY_WORKSPACE_ID:-deploy-health-$(date +%s)}"
