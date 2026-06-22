@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultCenterBaseUrl,
   isAllowedContentOrigin,
   shellVisibleStatusForReadiness,
 } from "../ui/ShellView";
@@ -75,5 +76,31 @@ describe("ShellView visible readiness", () => {
         liveReady: true,
       }),
     ).toBe("Content error");
+  });
+});
+
+describe("ShellView center URL defaults", () => {
+  it("uses the Worker origin for hosted shells", () => {
+    expect(
+      defaultCenterBaseUrl(
+        "https://lanedeck-center.atticusdeng.workers.dev",
+        false,
+      ),
+    ).toBe("https://lanedeck-center.atticusdeng.workers.dev");
+  });
+
+  it("uses the local center for Vite dev and desktop shell origins", () => {
+    expect(
+      defaultCenterBaseUrl(
+        "https://lanedeck-center.atticusdeng.workers.dev",
+        true,
+      ),
+    ).toBe("http://localhost:8787");
+    expect(defaultCenterBaseUrl("tauri://localhost", false)).toBe(
+      "http://localhost:8787",
+    );
+    expect(defaultCenterBaseUrl("http://tauri.localhost", false)).toBe(
+      "http://localhost:8787",
+    );
   });
 });

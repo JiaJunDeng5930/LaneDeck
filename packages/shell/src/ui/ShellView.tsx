@@ -13,6 +13,7 @@ import {
   type ShellApp,
 } from "../index";
 
+const localCenterBaseUrl = "http://localhost:8787";
 const centerBaseUrl =
   import.meta.env.VITE_LANEDECK_CENTER_URL ?? defaultCenterBaseUrl();
 const workspaceId =
@@ -222,9 +223,24 @@ export function isAllowedContentOrigin(
   );
 }
 
-function defaultCenterBaseUrl(): string {
-  if (import.meta.env.DEV) {
-    return "http://localhost:8787";
+export function defaultCenterBaseUrl(
+  origin = globalThis.location?.origin,
+  isDev = import.meta.env.DEV,
+): string {
+  if (isDev || origin === undefined) {
+    return localCenterBaseUrl;
   }
-  return globalThis.location?.origin ?? "http://localhost:8787";
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return localCenterBaseUrl;
+  }
+  if (
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    url.hostname.endsWith(".workers.dev")
+  ) {
+    return url.origin;
+  }
+  return localCenterBaseUrl;
 }
