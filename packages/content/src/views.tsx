@@ -367,13 +367,13 @@ function dashboardRows(
       if (!matchesLaneFilter(row, laneFilter)) {
         continue;
       }
-      rows.push(toDashboardRow(row, rowIndex, 0));
+      rows.push(toDashboardRow(row, rowIndex, 0, "row"));
       continue;
     }
 
     for (const [frameIndex, frame] of frames.entries()) {
       if (isJsonObject(frame) && matchesLaneFilter(frame, laneFilter)) {
-        rows.push(toDashboardRow(frame, rowIndex, frameIndex));
+        rows.push(toDashboardRow(frame, rowIndex, frameIndex, "frame"));
       }
     }
   }
@@ -391,6 +391,7 @@ function toDashboardRow(
   row: JsonObject,
   rowIndex: number,
   frameIndex: number,
+  source: "frame" | "row",
 ): DashboardRow {
   const summary = isJsonObject(row.summary) ? row.summary : {};
   const laneId = scalarString(row.laneId);
@@ -415,7 +416,10 @@ function toDashboardRow(
     laneId,
     stage,
     triggerKind: scalarString(row.triggerKind),
-    observedAt: scalarString(row.closedAt) ?? scalarString(row.observedAt),
+    observedAt:
+      source === "row"
+        ? (scalarString(row.observedAt) ?? scalarString(row.closedAt))
+        : (scalarString(row.closedAt) ?? scalarString(row.observedAt)),
     recordCount: scalarString(row.recordCount),
     batchId,
     machineId,
@@ -502,7 +506,24 @@ function compareRowsByTime(
   left: DashboardRow | undefined,
   right: DashboardRow | undefined,
 ): number {
-  return timestampMs(left?.observedAt) - timestampMs(right?.observedAt);
+  const time = timestampMs(left?.observedAt) - timestampMs(right?.observedAt);
+  if (time !== 0) {
+    return time;
+  }
+  return stageRank(left?.stage) - stageRank(right?.stage);
+}
+
+function stageRank(stage: StageKey | undefined): number {
+  if (stage === "event") {
+    return 2;
+  }
+  if (stage === "metric") {
+    return 1;
+  }
+  if (stage === "raw") {
+    return 0;
+  }
+  return -1;
 }
 
 function timestampMs(value: string | undefined): number {

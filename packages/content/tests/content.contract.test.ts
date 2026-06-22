@@ -268,6 +268,77 @@ describe("content package contract", () => {
     ).toBe(false);
   });
 
+  it("uses observedAt before closedAt for generic response rows", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            laneId: "lane.generic",
+            eventText: "generic event",
+            observedAt: "2026-06-11T00:09:00.000Z",
+            closedAt: "2026-06-11T00:01:00.000Z",
+            triggerKind: "count",
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain("2026-06-11T00:09:00.000Z");
+    expect(rendered.html).not.toContain("2026-06-11T00:01:00.000Z");
+  });
+
+  it("summarizes equal-timestamp lane frames by pipeline stage order", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane.tie",
+                stage: "event",
+                frameNo: 3,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:10:00.000Z",
+                summary: { eventText: "event completed" },
+              },
+              {
+                laneId: "lane.tie",
+                stage: "metric",
+                frameNo: 2,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:10:00.000Z",
+                summary: { eventText: "metric completed" },
+              },
+              {
+                laneId: "lane.tie",
+                stage: "raw",
+                frameNo: 1,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:10:00.000Z",
+                summary: { eventText: "raw completed" },
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain("<h3>lane.tie</h3><p>event completed</p>");
+  });
+
   it("renders a pipeline skeleton empty state", () => {
     const rendered = renderDashboardMarkup(
       {
