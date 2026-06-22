@@ -19,7 +19,8 @@ const centerBaseUrl =
 const workspaceId =
   import.meta.env.VITE_LANEDECK_WORKSPACE_ID ?? "workspace.local";
 const readToken = import.meta.env.VITE_LANEDECK_READ_TOKEN ?? "";
-const contentBaseUrl = import.meta.env.VITE_LANEDECK_CONTENT_BASE_URL ?? "";
+const contentBaseUrl =
+  import.meta.env.VITE_LANEDECK_CONTENT_BASE_URL ?? defaultContentBaseUrl();
 
 export interface ShellViewReadiness {
   contentReady: boolean;
@@ -243,4 +244,26 @@ export function defaultCenterBaseUrl(
     return url.origin;
   }
   return localCenterBaseUrl;
+}
+
+export function defaultContentBaseUrl(
+  origin = globalThis.location?.origin,
+  isDev = import.meta.env.DEV,
+): string {
+  if (isDev || origin === undefined) {
+    return "";
+  }
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return "";
+  }
+  if (
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    url.hostname.endsWith(".workers.dev")
+  ) {
+    return new URL("/content-by-workspace/", url.origin).toString();
+  }
+  return "";
 }
