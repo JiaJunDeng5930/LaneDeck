@@ -48,4 +48,7 @@ export interface CenterWorkerEnv {
   LANEDECK_AGENT_TOKEN?: string;
   LANEDECK_AI_MUTATION_TOKEN?: string;
   LANEDECK_READ_TOKEN?: string;
+  LANEDECK_ACCESS_TEAM_DOMAIN?: string;
+  LANEDECK_ACCESS_AUD?: string;
+  LANEDECK_ACCESS_ALLOWED_EMAILS?: string;
 }

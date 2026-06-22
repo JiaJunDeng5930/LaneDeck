@@ -16,7 +16,8 @@
     "deploy:dry-run": "sh -c 'bash ../../scripts/cloudflare-center-shell-build.sh && LANEDECK_AGENT_TOKEN=dry-run-agent-token LANEDECK_AI_MUTATION_TOKEN=dry-run-ai-mutation-token LANEDECK_READ_TOKEN=dry-run-read-token wrangler deploy --dry-run --strict --outdir .wrangler-dry-run'"
   },
   "dependencies": {
-    "@lanedeck/protocol": "workspace:*"
+    "@lanedeck/protocol": "workspace:*",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260610.1"

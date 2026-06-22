@@ -1,3 +1,6 @@
 LANEDECK_AGENT_TOKEN=replace-with-agent-token
 LANEDECK_AI_MUTATION_TOKEN=replace-with-ai-mutation-token
 LANEDECK_READ_TOKEN=replace-with-read-token
+LANEDECK_ACCESS_TEAM_DOMAIN=https://atticusdeng.cloudflareaccess.com
+LANEDECK_ACCESS_AUD=replace-with-access-app-aud
+LANEDECK_ACCESS_ALLOWED_EMAILS=atticusdeng@gmail.com

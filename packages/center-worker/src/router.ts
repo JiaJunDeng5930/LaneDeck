@@ -5,6 +5,7 @@ import {
   parseMutationRequest,
   parseQueryRequest,
 } from "@lanedeck/protocol";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 
 import {
   ApiError,
@@ -23,6 +24,8 @@ import {
 import type { CenterWorkerEnv, WorkspaceRpcResult } from "./runtime-types";
 
 const READ_SESSION_COOKIE = "LaneDeckReadSession";
+const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
+const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
 
 export async function handleRequest(
   request: Request,
@@ -152,6 +155,7 @@ async function routeRequest(
     (url.pathname.startsWith("/content/") ||
       url.pathname.startsWith("/content-by-workspace/"))
   ) {
+    await requireReadToken(request, env.LANEDECK_READ_TOKEN);
     return await readContentAsset(url, env);
   }
 
@@ -164,7 +168,7 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
-    await requireBrowserReadToken(request, url, env.LANEDECK_READ_TOKEN);
+    await requireBrowserReadToken(request, env.LANEDECK_READ_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -176,12 +180,17 @@ async function routeRequest(
     );
   }
 
-  if (request.method === "GET" && url.searchParams.has("readToken")) {
-    return await establishReadSession(request, url, env.LANEDECK_READ_TOKEN);
+  if (request.method === "GET" && url.pathname === "/") {
+    return redirectToShell(request);
   }
 
   if (request.method === "GET") {
-    return await readShellAsset(request, env);
+    const authenticatedWithAccess = await requireShellReadAccess(request, env);
+    const response = await readShellAsset(request, env);
+    if (authenticatedWithAccess) {
+      return withReadSessionCookie(response, env.LANEDECK_READ_TOKEN);
+    }
+    return response;
   }
 
   return errorResponse(
@@ -206,35 +215,13 @@ async function readShellAsset(
   return await env.ASSETS.fetch(request);
 }
 
-async function establishReadSession(
-  request: Request,
-  url: URL,
-  expectedToken: string | undefined,
-): Promise<Response> {
-  if (expectedToken === undefined || expectedToken.length === 0) {
-    throw new ApiError(500, "authentication_not_configured", [
-      {
-        path: "readToken",
-        message: "expected configured bearer token",
-      },
-    ]);
-  }
-
-  const suppliedToken = url.searchParams.get("readToken");
-  if (!(await secretEquals(suppliedToken, expectedToken))) {
-    throw authenticationFailed();
-  }
-
-  const redirectUrl = new URL(request.url);
-  redirectUrl.searchParams.delete("readToken");
-  const headers = new Headers({
-    location: redirectUrl.toString(),
+function redirectToShell(request: Request): Response {
+  const url = new URL(request.url);
+  url.pathname = "/shell";
+  return new Response(null, {
+    status: 302,
+    headers: { location: url.toString() },
   });
-  headers.append(
-    "set-cookie",
-    `${READ_SESSION_COOKIE}=${encodeURIComponent(expectedToken)}; Path=/; HttpOnly; Secure; SameSite=Lax`,
-  );
-  return new Response(null, { status: 302, headers });
 }
 
 async function readContentAsset(
@@ -400,6 +387,143 @@ async function requireBearerToken(
   throw authenticationFailed();
 }
 
+async function requireAccessIdentity(
+  request: Request,
+  env: CenterWorkerEnv,
+): Promise<JWTPayload> {
+  const teamDomain = requireAccessTeamDomain(env.LANEDECK_ACCESS_TEAM_DOMAIN);
+  const audience = requireAccessAudience(env.LANEDECK_ACCESS_AUD);
+  const token = request.headers.get(ACCESS_JWT_HEADER);
+  if (token === null || token.trim().length === 0) {
+    throw accessAuthenticationFailed("expected Cloudflare Access JWT");
+  }
+
+  let payload: JWTPayload;
+  try {
+    const result = await jwtVerify(
+      token,
+      createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`)),
+      {
+        issuer: teamDomain,
+        audience,
+      },
+    );
+    payload = result.payload;
+  } catch {
+    throw accessAuthenticationFailed("expected valid Cloudflare Access JWT");
+  }
+
+  const allowedEmails = readAllowedAccessEmails(
+    env.LANEDECK_ACCESS_ALLOWED_EMAILS,
+  );
+  if (allowedEmails.size > 0) {
+    const email = accessEmail(request, payload);
+    if (email === undefined || !allowedEmails.has(email.toLowerCase())) {
+      throw new ApiError(403, "access_forbidden", [
+        {
+          path: "email",
+          message: "expected allowed Cloudflare Access user",
+        },
+      ]);
+    }
+  }
+
+  return payload;
+}
+
+async function requireShellReadAccess(
+  request: Request,
+  env: CenterWorkerEnv,
+): Promise<boolean> {
+  if (hasAccessJwt(request)) {
+    await requireAccessIdentity(request, env);
+    return true;
+  }
+
+  if (hasReadCredential(request)) {
+    await requireBrowserReadToken(request, env.LANEDECK_READ_TOKEN);
+    return false;
+  }
+
+  await requireAccessIdentity(request, env);
+  return true;
+}
+
+function hasAccessJwt(request: Request): boolean {
+  const token = request.headers.get(ACCESS_JWT_HEADER);
+  return token !== null && token.trim().length > 0;
+}
+
+function hasReadCredential(request: Request): boolean {
+  return (
+    request.headers.has("authorization") || readSessionCookie(request) !== null
+  );
+}
+
+function requireAccessTeamDomain(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0) {
+    throw accessConfigurationError("LANEDECK_ACCESS_TEAM_DOMAIN");
+  }
+  const domain = value.trim().replace(/\/+$/, "");
+  try {
+    const url = new URL(domain);
+    if (url.protocol === "https:" && url.pathname === "/") {
+      return url.origin;
+    }
+  } catch {
+    // handled below
+  }
+  throw accessConfigurationError("LANEDECK_ACCESS_TEAM_DOMAIN");
+}
+
+function requireAccessAudience(value: string | undefined): string {
+  if (value !== undefined && value.trim().length > 0) {
+    return value.trim();
+  }
+  throw accessConfigurationError("LANEDECK_ACCESS_AUD");
+}
+
+function readAllowedAccessEmails(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter((email) => email.length > 0),
+  );
+}
+
+function accessEmail(
+  request: Request,
+  payload: JWTPayload,
+): string | undefined {
+  const headerEmail = request.headers.get(ACCESS_EMAIL_HEADER);
+  if (headerEmail !== null && headerEmail.trim().length > 0) {
+    return headerEmail.trim();
+  }
+  if (typeof payload.email === "string" && payload.email.trim().length > 0) {
+    return payload.email.trim();
+  }
+  return undefined;
+}
+
+function accessConfigurationError(path: string): ApiError {
+  return new ApiError(500, "access_authentication_not_configured", [
+    {
+      path,
+      message: "expected Cloudflare Access configuration",
+    },
+  ]);
+}
+
+function accessAuthenticationFailed(message: string): ApiError {
+  return new ApiError(401, "access_authentication_failed", [
+    {
+      path: ACCESS_JWT_HEADER,
+      message,
+    },
+  ]);
+}
+
 async function requireReadToken(
   request: Request,
   expectedToken: string | undefined,
@@ -428,9 +552,37 @@ async function requireReadToken(
   throw authenticationFailed();
 }
 
+function withReadSessionCookie(
+  response: Response,
+  expectedToken: string | undefined,
+): Response {
+  const readToken = requireReadSessionToken(expectedToken);
+  const headers = new Headers(response.headers);
+  headers.append(
+    "set-cookie",
+    `${READ_SESSION_COOKIE}=${encodeURIComponent(readToken)}; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function requireReadSessionToken(value: string | undefined): string {
+  if (value !== undefined && value.length > 0) {
+    return value;
+  }
+  throw new ApiError(500, "authentication_not_configured", [
+    {
+      path: "readToken",
+      message: "expected configured bearer token",
+    },
+  ]);
+}
+
 async function requireBrowserReadToken(
   request: Request,
-  url: URL,
   expectedToken: string | undefined,
 ): Promise<void> {
   if (expectedToken === undefined || expectedToken.length === 0) {
@@ -442,16 +594,15 @@ async function requireBrowserReadToken(
     ]);
   }
 
-  const [bearerMatches, queryMatches, cookieMatches] = await Promise.all([
+  const [bearerMatches, cookieMatches] = await Promise.all([
     secretEquals(
       request.headers.get("authorization"),
       `Bearer ${expectedToken}`,
     ),
-    secretEquals(url.searchParams.get("readToken"), expectedToken),
     secretEquals(readSessionCookie(request), expectedToken),
   ]);
 
-  if (bearerMatches || queryMatches || cookieMatches) {
+  if (bearerMatches || cookieMatches) {
     return;
   }
 

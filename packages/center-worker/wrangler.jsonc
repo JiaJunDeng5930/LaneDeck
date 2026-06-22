@@ -7,6 +7,11 @@
     "enabled": true,
     "head_sampling_rate": 1,
   },
+  "vars": {
+    "LANEDECK_ACCESS_TEAM_DOMAIN": "https://atticusdeng.cloudflareaccess.com",
+    "LANEDECK_ACCESS_AUD": "2d0232c963906b4d341a49d85dc65934947f18515cdc1d5de2d50ad643920775",
+    "LANEDECK_ACCESS_ALLOWED_EMAILS": "atticusdeng@gmail.com",
+  },
   "assets": {
     "directory": "../shell/dist",
     "binding": "ASSETS",

@@ -13,6 +13,10 @@ content artifacts, and live WebSocket updates.
   - `LANEDECK_AGENT_TOKEN`
   - `LANEDECK_AI_MUTATION_TOKEN`
   - `LANEDECK_READ_TOKEN`
+- Access application:
+  - browser entry route: `/shell`
+  - team domain: `https://atticusdeng.cloudflareaccess.com`
+  - allowed email: `atticusdeng@gmail.com`
 
 ## Deploy
 
@@ -36,6 +40,14 @@ R2 availability, the `lanedeck` bucket, and the Worker dry-run package.
 
 `deploy:center` creates the `lanedeck` R2 bucket only when the bucket is
 missing. An account-level R2 entitlement failure stops the deployment.
+
+The root route redirects to `/shell`. Cloudflare Access protects `/shell`.
+The Worker validates the `Cf-Access-Jwt-Assertion` header against the
+configured team domain and application audience, then mints the
+`LaneDeckReadSession` HttpOnly cookie for same-origin shell reads, content
+assets, and browser live updates. Machine routes and verification scripts stay
+outside the Access application and are authorized by their Bearer tokens in the
+Worker.
 
 After deploy, run the center verification:
 

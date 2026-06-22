@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { SignJWT, exportJWK, generateKeyPair, type JWK } from "jose";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/errors";
 import { LiveHub, restoreLiveSockets, type LiveSocket } from "../src/live";
@@ -61,51 +62,21 @@ const validLaneConfig = {
   },
 } satisfies LaneConfig;
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("center-worker contract", () => {
-  it("establishes a browser read session without serving shell assets", async () => {
-    let assetsFetched = false;
+  it("redirects the root entry to the Access-protected shell route", async () => {
     const response = await handleRequest(
-      new Request("https://center.local/?readToken=read-token&view=home"),
-      {
-        ...createHarness().env,
-        ASSETS: shellAssets(() => {
-          assetsFetched = true;
-          return new Response("asset");
-        }),
-      },
+      new Request("https://center.local/?view=home"),
+      createHarness().env,
     );
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(
-      "https://center.local/?view=home",
+      "https://center.local/shell?view=home",
     );
-    expect(response.headers.get("set-cookie")).toContain(
-      "LaneDeckReadSession=read-token",
-    );
-    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
-    expect(response.headers.get("set-cookie")).toContain("Secure");
-    expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
-    expect(assetsFetched).toBe(false);
-  });
-
-  it("rejects invalid browser read session credentials before shell assets", async () => {
-    let assetsFetched = false;
-    const response = await handleRequest(
-      new Request("https://center.local/?readToken=wrong-token"),
-      {
-        ...createHarness().env,
-        ASSETS: shellAssets(() => {
-          assetsFetched = true;
-          return new Response("asset");
-        }),
-      },
-    );
-
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "authentication_failed",
-    });
-    expect(assetsFetched).toBe(false);
   });
 
   it("accepts the browser read session cookie for structured queries", async () => {
@@ -157,40 +128,116 @@ describe("center-worker contract", () => {
     expect(fetchedId).toBe("durable:workspace.local");
   });
 
-  it("serves shell assets for browser GET routes", async () => {
+  it("serves shell assets for Access-authenticated browser GET routes", async () => {
     let coordinatorFetched = false;
     let requestedUrl: string | undefined;
-    const response = await handleRequest(new Request("https://center.local/"), {
-      ...createHarness().env,
-      WORKSPACE_COORDINATOR: workspaceNamespace(
-        createHarness().coordinator,
-        () => {
-          coordinatorFetched = true;
-        },
-      ),
-      ASSETS: shellAssets((request) => {
-        requestedUrl = request.url;
-        return new Response(
-          '<!doctype html><div id="root">LaneDeck shell</div><script type="module" src="/assets/index.js"></script>',
-          { headers: { "content-type": "text/html; charset=utf-8" } },
-        );
+    const response = await handleRequest(
+      new Request("https://center.local/shell", {
+        headers: await accessHeaders(),
       }),
-    });
+      accessEnv({
+        ...createHarness().env,
+        WORKSPACE_COORDINATOR: workspaceNamespace(
+          createHarness().coordinator,
+          () => {
+            coordinatorFetched = true;
+          },
+        ),
+        ASSETS: shellAssets((request) => {
+          requestedUrl = request.url;
+          return new Response(
+            '<!doctype html><div id="root">LaneDeck shell</div><script type="module" src="/assets/index.js"></script>',
+            { headers: { "content-type": "text/html; charset=utf-8" } },
+          );
+        }),
+      }),
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("set-cookie")).toContain(
+      "LaneDeckReadSession=read-token",
+    );
     await expect(response.text()).resolves.toContain("LaneDeck shell");
-    expect(requestedUrl).toBe("https://center.local/");
+    expect(requestedUrl).toBe("https://center.local/shell");
     expect(coordinatorFetched).toBe(false);
   });
 
+  it("serves shell assets for browser read session GET routes", async () => {
+    let requestedUrl: string | undefined;
+    const response = await handleRequest(
+      new Request("https://center.local/assets/index.js", {
+        headers: { cookie: "LaneDeckReadSession=read-token" },
+      }),
+      {
+        ...createHarness().env,
+        ASSETS: shellAssets((request) => {
+          requestedUrl = request.url;
+          return new Response("console.log('shell');", {
+            headers: { "content-type": "text/javascript; charset=utf-8" },
+          });
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("content-type")).toContain("text/javascript");
+    await expect(response.text()).resolves.toContain("shell");
+    expect(requestedUrl).toBe("https://center.local/assets/index.js");
+  });
+
+  it("rejects browser GET routes without a Cloudflare Access JWT", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/shell"),
+      accessEnv({
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "access_authentication_failed",
+    });
+    expect(assetsFetched).toBe(false);
+  });
+
+  it("rejects browser GET routes for Access users outside the allowlist", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/shell", {
+        headers: await accessHeaders({ email: "other@example.com" }),
+      }),
+      accessEnv({
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "access_forbidden",
+    });
+    expect(assetsFetched).toBe(false);
+  });
+
   it("reports a configuration error when shell assets binding is missing", async () => {
-    const envWithoutAssets: CenterWorkerEnv = {
+    const envWithoutAssets: CenterWorkerEnv = accessEnv({
       ...createHarness().env,
       ASSETS: undefined,
-    };
+    });
     const response = await handleRequest(
-      new Request("https://center.local/"),
+      new Request("https://center.local/shell", {
+        headers: await accessHeaders(),
+      }),
       envWithoutAssets,
     );
 
@@ -199,6 +246,28 @@ describe("center-worker contract", () => {
       error: "shell_assets_not_configured",
       diagnostics: [expect.objectContaining({ path: "ASSETS" })],
     });
+  });
+
+  it("reports a configuration error when Access settings are missing", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/shell", {
+        headers: await accessHeaders(),
+      }),
+      {
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      },
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "access_authentication_not_configured",
+    });
+    expect(assetsFetched).toBe(false);
   });
 
   it("routes API requests before shell assets", async () => {
@@ -844,10 +913,13 @@ describe("center-worker contract", () => {
     let fetchedPath = "";
     const response = await handleRequest(
       new Request(
-        "https://center.local/ws/browser?workspaceId=workspace.local&readToken=read-token",
+        "https://center.local/ws/browser?workspaceId=workspace.local",
         {
           method: "GET",
-          headers: { upgrade: "websocket" },
+          headers: {
+            upgrade: "websocket",
+            cookie: "LaneDeckReadSession=read-token",
+          },
         },
       ),
       {
@@ -929,6 +1001,9 @@ describe("center-worker contract", () => {
     const response = await handleRequest(
       new Request(
         "https://center.local/content/revision-1/assets/my%20logo.svg",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
       ),
       {
         ...harness.env,
@@ -952,6 +1027,9 @@ describe("center-worker contract", () => {
     const response = await handleRequest(
       new Request(
         "https://center.local/content-by-workspace/workspace.local/revision-1/index.html",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
       ),
       {
         ...harness.env,
@@ -963,10 +1041,27 @@ describe("center-worker contract", () => {
     await expect(response.text()).resolves.toContain("workspace shell content");
   });
 
+  it("GET /content-by-workspace rejects requests without a browser read session", async () => {
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/content-by-workspace/workspace.local/revision-1/index.html",
+      ),
+      createHarness().env,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "authentication_failed",
+    });
+  });
+
   it("GET /content-by-workspace rejects encoded separators in workspace segments", async () => {
     const response = await handleRequest(
       new Request(
         "https://center.local/content-by-workspace/workspace%2Flocal/revision-1/index.html",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
       ),
       createHarness().env,
     );
@@ -983,6 +1078,9 @@ describe("center-worker contract", () => {
     const response = await handleRequest(
       new Request(
         "https://center.local/content/revision-1/assets/my%2Flogo.svg",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
       ),
       harness.env,
     );
@@ -999,6 +1097,9 @@ describe("center-worker contract", () => {
     const response = await handleRequest(
       new Request(
         "https://center.local/content/revision-1/assets/my%5Clogo.svg",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
       ),
       harness.env,
     );
@@ -1013,7 +1114,12 @@ describe("center-worker contract", () => {
   it("GET /content rejects malformed encoded path segments", async () => {
     const harness = createHarness();
     const response = await handleRequest(
-      new Request("https://center.local/content/revision-1/assets/my%logo.svg"),
+      new Request(
+        "https://center.local/content/revision-1/assets/my%logo.svg",
+        {
+          headers: { cookie: "LaneDeckReadSession=read-token" },
+        },
+      ),
       harness.env,
     );
 
@@ -2091,6 +2197,57 @@ describe("center-worker contract", () => {
     );
   });
 });
+
+const accessTeamDomain = "https://lanedeck-test.cloudflareaccess.com";
+const accessAudience = "lanedeck-test-aud";
+const accessUserEmail = "atticusdeng@gmail.com";
+
+function accessEnv(env: CenterWorkerEnv): CenterWorkerEnv {
+  return {
+    ...env,
+    LANEDECK_ACCESS_TEAM_DOMAIN: accessTeamDomain,
+    LANEDECK_ACCESS_AUD: accessAudience,
+    LANEDECK_ACCESS_ALLOWED_EMAILS: accessUserEmail,
+  };
+}
+
+async function accessHeaders(
+  options: { email?: string; audience?: string } = {},
+): Promise<HeadersInit> {
+  const { privateKey, publicKey } = await generateKeyPair("RS256");
+  const keyId = crypto.randomUUID();
+  const publicJwk: JWK = {
+    ...(await exportJWK(publicKey)),
+    alg: "RS256",
+    kid: keyId,
+  };
+  const email = options.email ?? accessUserEmail;
+  const token = await new SignJWT({ email })
+    .setProtectedHeader({ alg: "RS256", kid: keyId })
+    .setIssuer(accessTeamDomain)
+    .setAudience(options.audience ?? accessAudience)
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(privateKey);
+
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    if (url === `${accessTeamDomain}/cdn-cgi/access/certs`) {
+      return Response.json({ keys: [publicJwk] });
+    }
+    return new Response("unexpected fetch", { status: 404 });
+  });
+
+  return {
+    "cf-access-jwt-assertion": token,
+    "cf-access-authenticated-user-email": email,
+  };
+}
 
 function createHarness(
   storage = new MemoryCenterStorage(),

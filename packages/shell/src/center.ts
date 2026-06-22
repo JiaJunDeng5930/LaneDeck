@@ -47,12 +47,19 @@ export interface CenterMutationClient {
   ): Promise<Extract<MutationResult, { mutation: "patch_content" }>>;
 }
 
-export interface BrowserLiveEvent {
-  type: "content_changed";
-  workspaceId: string;
-  contentRevision: string;
-  mutationId?: string;
-}
+export type BrowserLiveEvent =
+  | {
+      type: "content_changed";
+      workspaceId: string;
+      contentRevision: string;
+      mutationId?: string;
+    }
+  | {
+      type: "ingest_committed";
+      workspaceId: string;
+      batchId: string;
+      acceptedFrameCount: number;
+    };
 
 export interface BrowserLiveHandlers {
   onEvent(event: BrowserLiveEvent): void;
@@ -283,17 +290,10 @@ export function createBrowserDiagnosticReporter(
   };
 }
 
-export function centerLiveUrl(
-  baseUrl: string,
-  workspaceId: string,
-  readToken?: string,
-): string {
+export function centerLiveUrl(baseUrl: string, workspaceId: string): string {
   const url = new URL("/ws/browser", normalizeBaseUrl(baseUrl));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("workspaceId", workspaceId);
-  if (readToken !== undefined && readToken.trim().length > 0) {
-    url.searchParams.set("readToken", readToken);
-  }
   return url.toString();
 }
 
@@ -445,15 +445,41 @@ function handleLiveMessage(
     return;
   }
   if (
-    message.type === "ingest_committed" ||
     message.type === "lane_settings_changed" ||
     message.type === "workspace_alarm"
   ) {
     return;
   }
+  if (message.type === "ingest_committed") {
+    if (typeof message.workspaceId !== "string") {
+      handlers.onDiagnostic?.([
+        { path: "workspaceId", message: "expected string" },
+      ]);
+      return;
+    }
+    if (typeof message.batchId !== "string") {
+      handlers.onDiagnostic?.([
+        { path: "batchId", message: "expected string" },
+      ]);
+      return;
+    }
+    if (typeof message.acceptedFrameCount !== "number") {
+      handlers.onDiagnostic?.([
+        { path: "acceptedFrameCount", message: "expected number" },
+      ]);
+      return;
+    }
+    handlers.onEvent({
+      type: "ingest_committed",
+      workspaceId: message.workspaceId,
+      batchId: message.batchId,
+      acceptedFrameCount: message.acceptedFrameCount,
+    });
+    return;
+  }
   if (message.type !== "content_changed") {
     handlers.onDiagnostic?.([
-      { path: "type", message: "expected content_changed" },
+      { path: "type", message: "expected content_changed or ingest_committed" },
     ]);
     return;
   }

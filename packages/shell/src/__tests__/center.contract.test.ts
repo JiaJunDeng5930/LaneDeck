@@ -121,6 +121,12 @@ describe("center clients", () => {
         contentRevision: "rev-2",
         mutationId: "mutation-2",
       },
+      {
+        type: "ingest_committed",
+        workspaceId: "workspace.local",
+        batchId: "batch-1",
+        acceptedFrameCount: 1,
+      },
     ]);
     expect(diagnostics).toEqual([
       { path: "mutationId", message: "expected string" },
@@ -186,10 +192,8 @@ describe("center clients", () => {
   });
 
   it("builds browser WSS live URLs for workspaces", () => {
-    expect(
-      centerLiveUrl("https://center.example", "workspace.local", "read-token"),
-    ).toBe(
-      "wss://center.example/ws/browser?workspaceId=workspace.local&readToken=read-token",
+    expect(centerLiveUrl("https://center.example", "workspace.local")).toBe(
+      "wss://center.example/ws/browser?workspaceId=workspace.local",
     );
   });
 

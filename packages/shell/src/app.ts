@@ -138,6 +138,15 @@ export function createShellApp(deps: ShellDeps): ShellApp {
       }
       await enqueueContentLoad();
     }
+    if (event.type === "ingest_committed") {
+      if (
+        activeSession !== undefined &&
+        event.workspaceId !== activeSession.descriptor.workspaceId
+      ) {
+        return;
+      }
+      await enqueueContentLoad();
+    }
   }
 
   async function recordDiagnostics(

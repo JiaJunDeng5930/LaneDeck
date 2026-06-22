@@ -94,7 +94,7 @@ query_body="$(
 )"
 
 curl_request GET "$CENTER_URL/"
-expect_status 200 "root page"
+expect_status 302 "root redirect"
 
 curl_request POST "$CENTER_URL/api/query" "" "$query_body"
 expect_status 401 "unauthorized query"
@@ -179,7 +179,7 @@ jq -e --arg revision "$content_revision" \
   <<<"$RESPONSE_BODY" >/dev/null
 
 asset_url="$CENTER_URL/content/$content_revision/index.html"
-curl_request GET "$asset_url"
+curl_request GET "$asset_url" "$LANEDECK_READ_TOKEN"
 expect_status 200 "content asset"
 if [[ "$RESPONSE_BODY" != *"LaneDeck deploy health"* ]]; then
   echo "content asset did not contain deploy health marker" >&2

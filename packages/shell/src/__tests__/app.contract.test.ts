@@ -168,6 +168,36 @@ describe("shell app contract", () => {
     ]);
   });
 
+  it("reloads content when the live channel emits ingest_committed", async () => {
+    const center = new FakeCenter([
+      descriptor("workspace.local", "rev-1"),
+      descriptor("workspace.local", "rev-2"),
+    ]);
+    const live = new FakeLive();
+    const content = new FakeContentLoader();
+    const app = createShellApp({
+      center,
+      live,
+      contentLoader: content,
+      clipboard: new FakeClipboard().writer,
+      now: fixedNow,
+    });
+
+    await app.start();
+    live.emit({
+      type: "ingest_committed",
+      workspaceId: "workspace.local",
+      batchId: "batch-1",
+      acceptedFrameCount: 1,
+    });
+    await drainAsyncWork();
+
+    expect(content.loads.map((load) => load.revision)).toEqual([
+      "rev-1",
+      "rev-2",
+    ]);
+  });
+
   it("loads content after live connection failure", async () => {
     const center = new FakeCenter([descriptor("workspace.local", "rev-1")]);
     const live = new FakeLive({ failConnect: true });
@@ -543,6 +573,12 @@ describe("shell app contract", () => {
       type: "content_changed",
       workspaceId: "workspace.local",
       contentRevision: "rev-1",
+    });
+    live.emit({
+      type: "ingest_committed",
+      workspaceId: "other.workspace",
+      batchId: "batch-1",
+      acceptedFrameCount: 1,
     });
     live.emit({
       type: "content_changed",
