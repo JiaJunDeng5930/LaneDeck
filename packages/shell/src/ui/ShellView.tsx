@@ -223,5 +223,8 @@ export function isAllowedContentOrigin(
 }
 
 function defaultCenterBaseUrl(): string {
+  if (import.meta.env.DEV) {
+    return "http://localhost:8787";
+  }
   return globalThis.location?.origin ?? "http://localhost:8787";
 }

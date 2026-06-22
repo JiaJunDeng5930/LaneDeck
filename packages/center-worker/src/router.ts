@@ -217,6 +217,7 @@ async function readShellAsset(
 function redirectToShell(request: Request): Response {
   const url = new URL(request.url);
   url.pathname = "/shell";
+  url.searchParams.delete("readToken");
   return new Response(null, {
     status: 302,
     headers: { location: url.toString() },

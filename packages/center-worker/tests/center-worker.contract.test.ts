@@ -69,7 +69,7 @@ afterEach(() => {
 describe("center-worker contract", () => {
   it("redirects the root entry to the Access-protected shell route", async () => {
     const response = await handleRequest(
-      new Request("https://center.local/?view=home"),
+      new Request("https://center.local/?readToken=legacy-token&view=home"),
       createHarness().env,
     );
 
