@@ -630,8 +630,5 @@ function pickId(localTarget: string): string {
 }
 
 function pickSegment(value: string): string {
-  return value.replace(
-    /[^A-Za-z0-9._:-]/g,
-    (char) => `_${char.charCodeAt(0).toString(16)}_`,
-  );
+  return encodeURIComponent(value);
 }

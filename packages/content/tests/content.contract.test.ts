@@ -339,6 +339,50 @@ describe("content package contract", () => {
     expect(rendered.html).toContain("<h3>lane.tie</h3><p>event completed</p>");
   });
 
+  it("generates collision-free pick ids for escaped-looking lane ids", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane a",
+                stage: "event",
+                frameNo: 1,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:11:00.000Z",
+                summary: { eventText: "spaced lane" },
+              },
+              {
+                laneId: "lane_20_a",
+                stage: "event",
+                frameNo: 1,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:12:00.000Z",
+                summary: { eventText: "underscore lane" },
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.pickIds).toContain(
+      "packages/content/src/views.tsx#dashboard.lane.lane%20a",
+    );
+    expect(rendered.pickIds).toContain(
+      "packages/content/src/views.tsx#dashboard.lane.lane_20_a",
+    );
+    expect(new Set(rendered.pickIds).size).toBe(rendered.pickIds.length);
+  });
+
   it("renders a pipeline skeleton empty state", () => {
     const rendered = renderDashboardMarkup(
       {
