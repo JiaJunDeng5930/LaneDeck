@@ -290,10 +290,17 @@ export function createBrowserDiagnosticReporter(
   };
 }
 
-export function centerLiveUrl(baseUrl: string, workspaceId: string): string {
+export function centerLiveUrl(
+  baseUrl: string,
+  workspaceId: string,
+  readToken?: string,
+): string {
   const url = new URL("/ws/browser", normalizeBaseUrl(baseUrl));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("workspaceId", workspaceId);
+  if (readToken !== undefined && readToken.trim().length > 0) {
+    url.searchParams.set("readToken", readToken);
+  }
   return url.toString();
 }
 

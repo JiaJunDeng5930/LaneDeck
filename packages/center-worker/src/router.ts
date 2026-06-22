@@ -25,7 +25,6 @@ import type { CenterWorkerEnv, WorkspaceRpcResult } from "./runtime-types";
 
 const READ_SESSION_COOKIE = "LaneDeckReadSession";
 const ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
-const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
 
 export async function handleRequest(
   request: Request,
@@ -168,7 +167,7 @@ async function routeRequest(
 
   if (request.method === "GET" && url.pathname === "/ws/browser") {
     ensureWebSocketUpgrade(request);
-    await requireBrowserReadToken(request, env.LANEDECK_READ_TOKEN);
+    await requireBrowserReadToken(request, url, env.LANEDECK_READ_TOKEN);
     return await workspace(env, requiredWorkspaceId(url)).fetch(request);
   }
 
@@ -417,7 +416,7 @@ async function requireAccessIdentity(
     env.LANEDECK_ACCESS_ALLOWED_EMAILS,
   );
   if (allowedEmails.size > 0) {
-    const email = accessEmail(request, payload);
+    const email = accessEmail(payload);
     if (email === undefined || !allowedEmails.has(email.toLowerCase())) {
       throw new ApiError(403, "access_forbidden", [
         {
@@ -441,7 +440,11 @@ async function requireShellReadAccess(
   }
 
   if (hasReadCredential(request)) {
-    await requireBrowserReadToken(request, env.LANEDECK_READ_TOKEN);
+    await requireBrowserReadToken(
+      request,
+      new URL(request.url),
+      env.LANEDECK_READ_TOKEN,
+    );
     return false;
   }
 
@@ -492,14 +495,7 @@ function readAllowedAccessEmails(value: string | undefined): Set<string> {
   );
 }
 
-function accessEmail(
-  request: Request,
-  payload: JWTPayload,
-): string | undefined {
-  const headerEmail = request.headers.get(ACCESS_EMAIL_HEADER);
-  if (headerEmail !== null && headerEmail.trim().length > 0) {
-    return headerEmail.trim();
-  }
+function accessEmail(payload: JWTPayload): string | undefined {
   if (typeof payload.email === "string" && payload.email.trim().length > 0) {
     return payload.email.trim();
   }
@@ -583,6 +579,7 @@ function requireReadSessionToken(value: string | undefined): string {
 
 async function requireBrowserReadToken(
   request: Request,
+  url: URL,
   expectedToken: string | undefined,
 ): Promise<void> {
   if (expectedToken === undefined || expectedToken.length === 0) {
@@ -594,15 +591,16 @@ async function requireBrowserReadToken(
     ]);
   }
 
-  const [bearerMatches, cookieMatches] = await Promise.all([
+  const [bearerMatches, queryMatches, cookieMatches] = await Promise.all([
     secretEquals(
       request.headers.get("authorization"),
       `Bearer ${expectedToken}`,
     ),
+    secretEquals(url.searchParams.get("readToken"), expectedToken),
     secretEquals(readSessionCookie(request), expectedToken),
   ]);
 
-  if (bearerMatches || cookieMatches) {
+  if (bearerMatches || queryMatches || cookieMatches) {
     return;
   }
 

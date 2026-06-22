@@ -195,6 +195,11 @@ describe("center clients", () => {
     expect(centerLiveUrl("https://center.example", "workspace.local")).toBe(
       "wss://center.example/ws/browser?workspaceId=workspace.local",
     );
+    expect(
+      centerLiveUrl("https://center.example", "workspace.local", "read-token"),
+    ).toBe(
+      "wss://center.example/ws/browser?workspaceId=workspace.local&readToken=read-token",
+    );
   });
 
   it("records protocol diagnostics into browser storage", async () => {

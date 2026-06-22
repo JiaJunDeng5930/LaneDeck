@@ -229,6 +229,31 @@ describe("center-worker contract", () => {
     expect(assetsFetched).toBe(false);
   });
 
+  it("uses the signed Access email claim for the allowlist", async () => {
+    let assetsFetched = false;
+    const response = await handleRequest(
+      new Request("https://center.local/shell", {
+        headers: await accessHeaders({
+          email: "other@example.com",
+          headerEmail: accessUserEmail,
+        }),
+      }),
+      accessEnv({
+        ...createHarness().env,
+        ASSETS: shellAssets(() => {
+          assetsFetched = true;
+          return new Response("asset");
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "access_forbidden",
+    });
+    expect(assetsFetched).toBe(false);
+  });
+
   it("reports a configuration error when shell assets binding is missing", async () => {
     const envWithoutAssets: CenterWorkerEnv = accessEnv({
       ...createHarness().env,
@@ -920,6 +945,33 @@ describe("center-worker contract", () => {
             upgrade: "websocket",
             cookie: "LaneDeckReadSession=read-token",
           },
+        },
+      ),
+      {
+        WORKSPACE_COORDINATOR: workspaceNamespace({
+          fetch: async (request: Request) => {
+            fetchedPath = new URL(request.url).pathname;
+            return new Response(null, { status: 204 });
+          },
+        }),
+        LANEDECK_READ_TOKEN: "read-token",
+        LANEDECK_DB: {},
+        LANEDECK_BUCKET: {},
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(fetchedPath).toBe("/ws/browser");
+  });
+
+  it("browser WebSocket accepts explicit read tokens for remote shells", async () => {
+    let fetchedPath = "";
+    const response = await handleRequest(
+      new Request(
+        "https://center.local/ws/browser?workspaceId=workspace.local&readToken=read-token",
+        {
+          method: "GET",
+          headers: { upgrade: "websocket" },
         },
       ),
       {
@@ -2212,7 +2264,7 @@ function accessEnv(env: CenterWorkerEnv): CenterWorkerEnv {
 }
 
 async function accessHeaders(
-  options: { email?: string; audience?: string } = {},
+  options: { email?: string; headerEmail?: string; audience?: string } = {},
 ): Promise<HeadersInit> {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const keyId = crypto.randomUUID();
@@ -2245,7 +2297,7 @@ async function accessHeaders(
 
   return {
     "cf-access-jwt-assertion": token,
-    "cf-access-authenticated-user-email": email,
+    "cf-access-authenticated-user-email": options.headerEmail ?? email,
   };
 }
 
