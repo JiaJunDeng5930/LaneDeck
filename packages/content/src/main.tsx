@@ -3,6 +3,7 @@ import {
   createHttpCenterQueryClient,
   createWindowShellBridge,
 } from "./index";
+import "./styles.css";
 
 const app = createContentApp({
   query: createHttpCenterQueryClient(),

@@ -88,7 +88,9 @@ export function createContentApp(deps: ContentDeps): ContentApp {
         }
 
         const root = resolveRoot();
-        const rendered = renderDashboardMarkup(route, response);
+        const rendered = renderDashboardMarkup(route, response, {
+          contentRevision: hostState.contentRevision,
+        });
         root.innerHTML = rendered.html;
         activeRegistrations = bindRenderedPickTargets(root);
         currentRoute = route;

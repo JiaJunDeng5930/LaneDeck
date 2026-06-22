@@ -123,7 +123,7 @@ describe("content package contract", () => {
 
     expect(document.root.innerHTML).toContain("alpha metric frame");
     expect(document.root.innerHTML).toContain("lane.alpha");
-    expect(document.root.innerHTML).toContain("<dd>metric</dd>");
+    expect(document.root.innerHTML).toContain("lane.alpha / metric / count");
     expect(document.root.innerHTML).toContain("<dd>2</dd>");
     expect(document.root.innerHTML).toContain("<dd>count</dd>");
     expect(document.root.innerHTML).toContain(
@@ -131,7 +131,7 @@ describe("content package contract", () => {
     );
     expect(document.root.innerHTML).toContain("beta quiet frame");
     expect(document.root.innerHTML).toContain("lane.beta");
-    expect(document.root.innerHTML).toContain("<dd>event</dd>");
+    expect(document.root.innerHTML).toContain("lane.beta / event / time");
     expect(document.root.innerHTML).toContain("<dd>0</dd>");
     expect(document.root.innerHTML).toContain("<dd>time</dd>");
     expect(document.root.innerHTML).toContain(
@@ -141,6 +141,117 @@ describe("content package contract", () => {
       document.root.innerHTML.indexOf("beta quiet frame"),
     );
     app.dispose();
+  });
+
+  it("renders the operational home sections, metrics, and refined pick ids", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane.alpha",
+                stage: "raw",
+                frameNo: 1,
+                batchId: "batch-a",
+                machineId: "machine-alpha",
+                recordCount: 2,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:01:00.000Z",
+                summary: { eventText: "raw collected" },
+              },
+              {
+                laneId: "lane.alpha",
+                stage: "metric",
+                frameNo: 2,
+                batchId: "batch-a",
+                machineId: "machine-alpha",
+                recordCount: 0,
+                triggerKind: "time",
+                closedAt: "2026-06-11T00:02:00.000Z",
+                summary: { eventText: "quiet metric" },
+              },
+              {
+                laneId: "lane.alpha",
+                stage: "event",
+                frameNo: 3,
+                batchId: "batch-a",
+                machineId: "machine-alpha",
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:03:00.000Z",
+                summary: { eventText: "event emitted" },
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+      { contentRevision: "rev-1234567890abcdef" },
+    );
+
+    expect(rendered.html).toContain("Lane pipeline operations");
+    expect(rendered.html).toContain("dashboard / all lanes");
+    expect(rendered.html).toContain("rev-1234...cdef");
+    expect(rendered.html).toContain("Lane Pipeline Board");
+    expect(rendered.html).toContain("Recent Events Stream");
+    expect(rendered.html).toContain("Quiet signals");
+    expect(rendered.html).toContain("Count activity");
+    expect(rendered.html).toContain("raw collected");
+    expect(rendered.html).toContain("quiet metric");
+    expect(rendered.html).toContain("event emitted");
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.overview"',
+    );
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.lane.lane.alpha"',
+    );
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.stage.lane.alpha.raw"',
+    );
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.stage.lane.alpha.metric"',
+    );
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.stage.lane.alpha.event"',
+    );
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.event.lane.alpha:raw:1:batch-a:machine-alpha:row-0:frame-0"',
+    );
+    expect(rendered.pickIds).toContain(
+      "packages/content/src/views.tsx#dashboard.overview",
+    );
+    expect(rendered.pickIds).toContain(
+      "packages/content/src/views.tsx#dashboard.lane.lane.alpha",
+    );
+  });
+
+  it("renders a pipeline skeleton empty state", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.empty",
+      },
+      { rows: [], diagnostics: [] },
+    );
+
+    expect(rendered.html).toContain("Waiting for first frames");
+    expect(rendered.html).toContain("workspace.empty");
+    expect(rendered.html).toContain("Raw");
+    expect(rendered.html).toContain("Metric");
+    expect(rendered.html).toContain("Event");
+    expect(rendered.html).toContain(
+      'data-pick-id="packages/content/src/views.tsx#dashboard.empty"',
+    );
+    expect(rendered.pickIds).toEqual([
+      "packages/content/src/views.tsx#dashboard.root",
+      "packages/content/src/views.tsx#dashboard.overview",
+      "packages/content/src/views.tsx#dashboard.empty",
+    ]);
   });
 
   it("renders only frames for the dashboard lane route", () => {
@@ -183,8 +294,14 @@ describe("content package contract", () => {
     expect(rendered.html).toContain("lane.keep");
     expect(rendered.html).not.toContain("other lane frame");
     expect(rendered.html).not.toContain("lane.drop");
-    expect(rendered.pickIds).toHaveLength(2);
-    expect(rendered.pickIds[1]).toContain("lane.keep");
+    expect(rendered.pickIds).toContain(
+      "packages/content/src/views.tsx#dashboard.lane.lane.keep",
+    );
+    expect(
+      rendered.pickIds.some((pickId) =>
+        pickId.startsWith("packages/content/src/views.tsx#dashboard.event"),
+      ),
+    ).toBe(true);
   });
 
   it("renders unique fallback pick ids for same lane stage frame identities", () => {
@@ -224,7 +341,7 @@ describe("content package contract", () => {
       },
     );
     const framePickIds = rendered.pickIds.filter((pickId) =>
-      pickId.startsWith("packages/content/src/views.tsx#dashboard.frame"),
+      pickId.startsWith("packages/content/src/views.tsx#dashboard.event"),
     );
 
     expect(framePickIds).toHaveLength(2);
