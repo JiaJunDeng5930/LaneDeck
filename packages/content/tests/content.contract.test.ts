@@ -292,6 +292,59 @@ describe("content package contract", () => {
     expect(rendered.html).not.toContain("2026-06-11T00:01:00.000Z");
   });
 
+  it("renders custom route rows without dashboard pipeline sections", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "custom",
+        workspaceId: "workspace.local",
+        query: "custom_events",
+        title: "Custom Events",
+      },
+      {
+        rows: [
+          {
+            eventText: "custom row event",
+            observedAt: "2026-06-11T00:09:00.000Z",
+            triggerKind: "count",
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain("Custom Events");
+    expect(rendered.html).toContain("Query Results");
+    expect(rendered.html).toContain("custom row event");
+    expect(rendered.html).not.toContain("Lane Pipeline Board");
+    expect(rendered.html).not.toContain("Overview metrics");
+    expect(rendered.pickIds).not.toContain(
+      "packages/content/src/views.tsx#dashboard.overview",
+    );
+  });
+
+  it("uses direct title fields before summary fields for generic rows", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "custom",
+        workspaceId: "workspace.local",
+        query: "custom_events",
+      },
+      {
+        rows: [
+          {
+            eventText: "direct row title",
+            observedAt: "2026-06-11T00:09:00.000Z",
+            summary: { eventText: "summary title" },
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain("direct row title");
+    expect(rendered.html).not.toContain("summary title");
+  });
+
   it("summarizes equal-timestamp lane frames by pipeline stage order", () => {
     const rendered = renderDashboardMarkup(
       {

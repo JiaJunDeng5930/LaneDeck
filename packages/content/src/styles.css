@@ -316,6 +316,11 @@ body {
   overflow: hidden;
 }
 
+.ld-content > .ld-stream {
+  margin: 0 auto;
+  max-width: 1280px;
+}
+
 .ld-stream__list {
   display: grid;
 }

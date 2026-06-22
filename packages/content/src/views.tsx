@@ -71,6 +71,7 @@ export function renderDashboardMarkup(
 ): RenderedDashboard {
   const model = dashboardModel(route, response, context);
   const empty = model.rows.length === 0;
+  const custom = route.view === "custom";
   const html = renderToStaticMarkup(
     <main className="ld-content" data-pick-id={ROOT_PICK_ID}>
       <header className="ld-status-band">
@@ -98,32 +99,38 @@ export function renderDashboardMarkup(
         </dl>
       </header>
 
-      <section
-        className="ld-overview"
-        data-pick-id={OVERVIEW_PICK_ID}
-        aria-label="Overview metrics"
-      >
-        {model.metrics.map((metric) => (
-          <article className="ld-metric" key={metric.label}>
-            <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
-            <p>{metric.detail}</p>
-          </article>
-        ))}
-      </section>
-
-      {empty ? (
-        <EmptyDashboard workspaceId={route.workspaceId} />
+      {custom ? (
+        <RecentEvents rows={model.rows} title="Query Results" />
       ) : (
-        <div className="ld-dashboard-grid">
-          <PipelineBoard lanes={model.lanes} />
-          <RecentEvents rows={model.rows} />
-        </div>
+        <>
+          <section
+            className="ld-overview"
+            data-pick-id={OVERVIEW_PICK_ID}
+            aria-label="Overview metrics"
+          >
+            {model.metrics.map((metric) => (
+              <article className="ld-metric" key={metric.label}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <p>{metric.detail}</p>
+              </article>
+            ))}
+          </section>
+
+          {empty ? (
+            <EmptyDashboard workspaceId={route.workspaceId} />
+          ) : (
+            <div className="ld-dashboard-grid">
+              <PipelineBoard lanes={model.lanes} />
+              <RecentEvents rows={model.rows} title="Recent Events Stream" />
+            </div>
+          )}
+        </>
       )}
     </main>,
   );
 
-  return { html, pickIds: dashboardPickIds(model, empty) };
+  return { html, pickIds: dashboardPickIds(model, empty, route.view) };
 }
 
 export function renderErrorMarkup(message: string, detail?: string): string {
@@ -249,11 +256,17 @@ function StageCell({
   );
 }
 
-function RecentEvents({ rows }: { rows: DashboardRow[] }) {
+function RecentEvents({
+  rows,
+  title,
+}: {
+  rows: DashboardRow[];
+  title: string;
+}) {
   return (
     <section className="ld-stream" aria-label="Recent events stream">
       <div className="ld-section-heading">
-        <h2>Recent Events Stream</h2>
+        <h2>{title}</h2>
         <p>{formatCount(rows.length, "frame")}</p>
       </div>
       <div className="ld-stream__list">
@@ -412,7 +425,10 @@ function toDashboardRow(
         rowIndex,
         frameIndex,
       }),
-    title: frameTitle(row, summary, laneId, stage, frameNo),
+    title:
+      source === "row"
+        ? rowTitle(row, summary, laneId, stage, frameNo)
+        : frameTitle(row, summary, laneId, stage, frameNo),
     laneId,
     stage,
     triggerKind: scalarString(row.triggerKind),
@@ -456,6 +472,23 @@ function frameTitle(
     .filter((part) => part !== undefined)
     .join(" ");
   return identityTitle.length === 0 ? JSON.stringify(frame) : identityTitle;
+}
+
+function rowTitle(
+  row: JsonObject,
+  summary: JsonObject,
+  laneId: string | undefined,
+  stage: StageKey | undefined,
+  frameNo: string | undefined,
+): string {
+  const directTitle =
+    scalarString(row.eventText) ??
+    scalarString(row.text) ??
+    scalarString(row.message);
+  if (directTitle !== undefined) {
+    return directTitle;
+  }
+  return frameTitle(row, summary, laneId, stage, frameNo);
 }
 
 function routeLabel(route: ContentRoute): string {
@@ -579,8 +612,20 @@ function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function dashboardPickIds(model: DashboardModel, empty: boolean): string[] {
-  const pickIds = [ROOT_PICK_ID, OVERVIEW_PICK_ID];
+function dashboardPickIds(
+  model: DashboardModel,
+  empty: boolean,
+  routeView: ContentRoute["view"],
+): string[] {
+  const pickIds = [ROOT_PICK_ID];
+  if (routeView === "custom") {
+    for (const row of model.rows) {
+      pickIds.push(row.pickId);
+    }
+    return Array.from(new Set(pickIds));
+  }
+
+  pickIds.push(OVERVIEW_PICK_ID);
   if (empty) {
     pickIds.push(EMPTY_PICK_ID);
   }
