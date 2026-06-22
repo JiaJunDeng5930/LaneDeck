@@ -1,4 +1,8 @@
-# LaneDeck
+<h1 align="center">LaneDeck</h1>
+
+<p align="center">
+  <img src="docs/assets/lanedeck-default.png" alt="LaneDeck default shell state" width="900">
+</p>
 
 Personal observability deck for local agents, lane pipelines, and AI-editable dashboards.
 
