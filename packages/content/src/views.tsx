@@ -399,15 +399,18 @@ function toDashboardRow(
   const batchId = scalarString(row.batchId);
   const machineId = scalarString(row.machineId);
   return {
-    pickId: eventPickId({
-      laneId,
-      stage,
-      frameNo,
-      batchId,
-      machineId,
-      rowIndex,
-      frameIndex,
-    }),
+    pickId:
+      scalarString(row.pickId) ??
+      scalarString(row.sourceId) ??
+      eventPickId({
+        laneId,
+        stage,
+        frameNo,
+        batchId,
+        machineId,
+        rowIndex,
+        frameIndex,
+      }),
     title: frameTitle(row, summary, laneId, stage, frameNo),
     laneId,
     stage,

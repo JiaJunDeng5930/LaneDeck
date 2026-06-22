@@ -230,6 +230,44 @@ describe("content package contract", () => {
     );
   });
 
+  it("preserves supplied source-level pick ids before generated event fallbacks", () => {
+    const rendered = renderDashboardMarkup(
+      {
+        view: "dashboard",
+        workspaceId: "workspace.local",
+      },
+      {
+        rows: [
+          {
+            frames: [
+              {
+                laneId: "lane.picked",
+                stage: "event",
+                frameNo: 8,
+                recordCount: 1,
+                triggerKind: "count",
+                closedAt: "2026-06-11T00:08:00.000Z",
+                summary: { eventText: "source mapped event" },
+                pickId: "custom/source.tsx#event.card",
+              },
+            ],
+          },
+        ],
+        diagnostics: [],
+      },
+    );
+
+    expect(rendered.html).toContain(
+      'data-pick-id="custom/source.tsx#event.card"',
+    );
+    expect(rendered.pickIds).toContain("custom/source.tsx#event.card");
+    expect(
+      rendered.pickIds.some((pickId) =>
+        pickId.startsWith("packages/content/src/views.tsx#dashboard.event"),
+      ),
+    ).toBe(false);
+  });
+
   it("renders a pipeline skeleton empty state", () => {
     const rendered = renderDashboardMarkup(
       {
